@@ -9,11 +9,15 @@ void printList(SListNode *theList){
 
 int insertAtEnd(SListNode **theList, int data){
     
-    if (*theList) 
+    if ((*theList) == NULL){
+        SListNode *node;
+        node = (SListNode *) malloc(sizeof(SListNode));
+        node->data = data;
+        node->next = NULL;
+        return 0;
+    }
 
-    SListNode *prev = *theList;
-    while ((*theList) != NULL){
-        prev = *theList;
+    while ((*theList)->next != NULL){
         *theList = (* theList)->next;
     }
 
@@ -24,7 +28,7 @@ int insertAtEnd(SListNode **theList, int data){
 
     (*theList)->next = node;
 
-    return(0);
+    return 0;
 }
 
 
