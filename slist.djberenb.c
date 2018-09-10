@@ -19,6 +19,26 @@ void printList(SListNode *theList){
     printf("\n");
 }
 
+void createNode(SListNode **node, int data){
+    /*
+     * Allocate memory for and populate the fields of a new
+     * Linked List node
+     *
+     * args:
+     *     :**node (SListNode) - memory location for this new node
+     *     :data (int) - the data that n will carry
+     *
+     * returns:
+     *     :(void)
+     */
+
+     SListNode *n;
+     n = (SListNode *) malloc(sizeof(SListNode));
+     n->data = data;
+     n->next = NULL;
+     *node = n; 
+}
+
 int insertAtEnd(SListNode **theList, int data){
     /* Append a node to the end of a linked list
      * args:
@@ -30,11 +50,8 @@ int insertAtEnd(SListNode **theList, int data){
 
     // if the list has no head, generate one and return
     if ((*theList) == NULL){
-        SListNode *node;
-        node = (SListNode *) malloc(sizeof(SListNode));
-        node->data = data;
-        node->next = NULL;
-        *theList = node;
+        printf("generating head\n");
+        createNode(theList, data);
         return 0;
     }
     
@@ -44,15 +61,30 @@ int insertAtEnd(SListNode **theList, int data){
     while (curr->next != NULL){
         curr = curr->next;
     }
-
+    
     SListNode *node;
-    node = (SListNode *) malloc(sizeof(SListNode));
-    node->data = data;
-    node->next = NULL;
+    createNode(&node, data);
     curr->next = node;
 
     return 0;
 }
 
+int insertSorted(SListNode **theList, int data){
 
+    // list has no head, just create a length 1 list
+    if ((*theList) == NULL){
+        return insertAtEnd(theList, data);
+    }
+
+    SListNode *curr;
+    curr = (* theList);
+    // iterate through the list until insertion location is reached
+    while (curr->next != NULL || curr->next->data < data){
+        curr = curr->next;
+    }
+    
+    //SListNode *node;
+    //node = (S
+
+}
 
