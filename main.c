@@ -9,5 +9,6 @@ int main(int argc, char *argv[]){
     for (i=1; i<=10; ++i){
         insertAtEnd(&theList, i);        
     }
+    insertSorted(&theList, -1);
     printList(theList);
 }

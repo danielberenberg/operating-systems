@@ -70,21 +70,43 @@ int insertAtEnd(SListNode **theList, int data){
 }
 
 int insertSorted(SListNode **theList, int data){
+    /*
+     * Insert a node into a linked list such that the node
+     * is located at the first occurrence of the value of 
+     * data being greater than the current node's data value
+     *
+     * E.g for a list [1 2 3 4 6]
+     *
+     * insertSorted([1 2 3 4 6],5) would result in a list
+     *  [1 2 3 4 5 6]
+     *
+     *  args:
+     *      :**theList - linked list into which data will be inserted
+     *      :data (int) - data to insert
+     *
+     *  returns:
+     *      :(int) - 0 on successful insertion
+     */
 
     // list has no head, just create a length 1 list
     if ((*theList) == NULL){
         return insertAtEnd(theList, data);
     }
 
-    SListNode *curr;
-    curr = (* theList);
+    SListNode *prev = NULL;
+    SListNode *curr = (*theList);
     // iterate through the list until insertion location is reached
-    while (curr->next != NULL || curr->next->data < data){
+    while (prev->next != NULL && prev->data < data){
+        prev = curr;
         curr = curr->next;
     }
     
-    //SListNode *node;
-    //node = (S
+    SListNode *node;
 
+    createNode(&node, data);
+    node->next = curr; 
+    printf("insertSorted\n");
+
+    return 0;
 }
 
