@@ -1,4 +1,7 @@
-typedef struct sListStruct {
+#include <stdio.h>  /* I/O such as printf */
+#include <stdlib.h> /* malloc, free */
+
+typedef struct slistStruct {
     int data;
     struct slistStruct *next;
 } SListNode;
