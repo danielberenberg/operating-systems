@@ -9,6 +9,5 @@ int main(int argc, char *argv[]){
     for (i=1; i<=10; ++i){
         insertAtEnd(&theList, i);        
     }
-    printf("passed 4 loop\n");
     printList(theList);
 }
