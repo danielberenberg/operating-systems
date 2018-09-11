@@ -21,3 +21,4 @@ int isInList(SListNode *theList, int data);
 int deleteFromList(SListNode **theList, int data);
 /* if the value isn't in the list, then do nothing and return non-zero value;
  * otherwise deleta all listnodes matching the data from the list and return zero */
+
