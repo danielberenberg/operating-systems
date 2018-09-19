@@ -1,4 +1,7 @@
 #include "slist.djberenb.h" /* custom interface */
+#include <stdio.h>  /* I/O such as printf */
+#include <stdlib.h> /* malloc, free */
+
 
 void printList(SListNode *theList){
     /* Print a linked list
