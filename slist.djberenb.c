@@ -3,7 +3,7 @@
 #include <stdlib.h> /* malloc, free */
 
 
-void printList(SListNode *theList){
+void printListS(SListNode *theList){
     /* Print a linked list
      * args:
      *     :(**theList) - list to print
@@ -22,7 +22,7 @@ void printList(SListNode *theList){
     printf("\n");
 }
 
-void createNode(SListNode **node, int data, SListNode *next){
+void createNodeS(SListNode **node, int data, SListNode *next){
     /*
      * Allocate memory for and populate the fields of a new
      * Linked List node. Intentionally left out of .h as a private API
@@ -44,7 +44,7 @@ void createNode(SListNode **node, int data, SListNode *next){
      *node = n; 
 }
 
-int insertAtEnd(SListNode **theList, int data){
+int insertAtEndS(SListNode **theList, int data){
     /* Append a node to the end of a linked list
      * args:
      *     :**theList (SListNode) - the head of the linked list
@@ -55,7 +55,7 @@ int insertAtEnd(SListNode **theList, int data){
 
     // if the list has no head, generate one and return
     if ((*theList) == NULL){
-        createNode(theList, data,NULL);
+        createNodeS(theList, data,NULL);
         return 0;
     }
     
@@ -67,13 +67,13 @@ int insertAtEnd(SListNode **theList, int data){
     }
     
     SListNode *node;
-    createNode(&node, data, NULL);
+    createNodeS(&node, data, NULL);
     curr->next = node;
 
     return 0;
 }
 
-int insertSorted(SListNode **theList, int data){
+int insertSortedS(SListNode **theList, int data){
     /*
      * Insert a node into a linked list such that the node
      * is located at the first occurrence of the value of 
@@ -94,14 +94,14 @@ int insertSorted(SListNode **theList, int data){
 
     // list has no head, just create a length 1 list
     if ((*theList) == NULL){
-        return insertAtEnd(theList, data);
+        return insertAtEndS(theList, data);
     }
 
     SListNode *curr = (*theList);
     SListNode *node;
     if (curr->data > data){
-        createNode(&node, data, curr);    
-        node->next = curr;
+        createNodeS(&node, data, curr);    
+        //node->next = curr;
         *theList = node;
         return 0;
     }
@@ -111,13 +111,13 @@ int insertSorted(SListNode **theList, int data){
         curr = curr->next;
     }
 
-    createNode(&node, data, curr->next);
+    createNodeS(&node, data, curr->next);
     curr->next = node;
     return 0;
 }
 
 
-int isInList(SListNode *theList, int data){
+int isInListS(SListNode *theList, int data){
    /*
     * Validate that a node carrying data is in theList
     *
@@ -140,7 +140,7 @@ int isInList(SListNode *theList, int data){
     return 0;
 }
 
-int deleteFromList(SListNode **theList, int data){
+int deleteFromListS(SListNode **theList, int data){
     /*
      * delete all occurrences of data from list
      *

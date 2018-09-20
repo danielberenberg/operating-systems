@@ -1,7 +1,6 @@
 #include "dlist.djberenb.h" /* custom interface */
 #include <stdio.h>  /* I/O such as printf */
 #include <stdlib.h> /* malloc, free */
-#include <string.h> /* string operations such as concatenation */
 
 void printList(DListNode *theList){
     /* Print a doubly linked list
@@ -100,4 +99,54 @@ int insertAtEnd(DListNode **theList, int data){
 
     tail->next = head->prev = created;
     return 0;
+}
+
+int insertSorted(DListNode **theList, int data){
+    /*
+     * Insert a node into a linked list such that the node
+     * is located at the first occurrence of the value of 
+     * data being greater than the current node's data value
+     *
+     * E.g for a list [1 2 3 4 6]
+     *
+     * insertSorted([1 2 3 4 6],5) would result in a list
+     *  [1 2 3 4 5 6]
+     *
+     *  args:
+     *      :**theList - linked list into which data will be inserted
+     *      :data (int) - data to insert
+     *
+     *  returns:
+     *      :(int) - 0 on successful insertion
+     */
+    
+    // populate a null list
+    if ((*theList) == NULL){
+        return insertAtEnd(theList, data);
+    }
+
+    // initialize some placeholder variables and dummies
+    DListNode *head, *tail, *curr, *node;
+    head = (*theList);
+    tail = head->prev;
+    curr = head;
+    
+    // iterate through the list until reaching the tail
+    while (curr != tail){
+        if (data < curr->data){
+        
+           // placing node N containing `data` between two neighbors A and C (current)
+           createNode(&node, data, curr, curr->prev); // logically wire up data to point forward to C and backward to A
+           curr->prev->next = node; // rewire A to point towards N 
+           curr->prev = node; // rewire C to link back to N
+
+           if (curr == head){
+               *theList = node; // reassign the head if updating the first element 
+           }
+           return 0;
+        }
+        curr = curr->next;
+    }
+    // reached the tail means to append to the back of the list 
+    return insertAtEnd(theList,data); 
 }
