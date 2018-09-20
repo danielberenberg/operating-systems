@@ -150,3 +150,66 @@ int insertSorted(DListNode **theList, int data){
     // reached the tail means to append to the back of the list 
     return insertAtEnd(theList,data); 
 }
+
+int isInList(DListNode *theList, int data){
+   /*
+    * Validate that a node carrying data is in theList
+    *
+    * args:
+    *     :(DListNode) *theList - list to search
+    *     :(int) data - data to query
+    *
+    * returns:
+    *     :(int) - 1 if data is contained, 0 otherwise
+    */ 
+    
+    while (theList != NULL){
+       if (theList->data == data){
+           return 1; 
+       }
+       theList = theList->next;
+    }
+    return 0;
+}
+
+int deleteFromList(DListNode **theList, int data){
+    /*
+     * delete all occurrences of data from list
+     *
+     * args:
+     *     :(DListNode) **theList - list to search
+     *     :(int) data - data to query
+     *
+     * returns:
+     *     :(int) - 0 on successful deletion, 1 otherwise
+     */ 
+
+    int d = 1; // indicates deletion or not
+    DListNode *curr, *temp, *tail, *head; 
+    curr = head = (*theList);
+    tail = head->prev;
+
+    while (curr != tail){
+
+        // if a match is found
+        if (curr->data == data){ 
+            curr->prev->next = curr->next; // rewire appropriately 
+            if (curr == head){ 
+                // get rid of the data
+                head = curr->next;
+                head->prev = curr->prev;
+                *theList = head;
+                curr = head;
+                free(curr);
+            }
+            else { 
+                temp = curr->next;
+                free(curr);
+                curr = temp;
+            }
+            d = 0; // update deleted indicator
+        }
+        else{ curr = curr->next; } // current becomes next }
+    }
+    return d;
+}
