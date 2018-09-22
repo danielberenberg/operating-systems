@@ -162,8 +162,13 @@ int isInList(DListNode *theList, int data){
     * returns:
     *     :(int) - 1 if data is contained, 0 otherwise
     */ 
-    
-    while (theList != NULL){
+    DListNode *head = theList;
+    DListNode *tail = head->prev;
+    if (tail->data == data){
+        return 1;
+    }
+
+    while (theList != tail){
        if (theList->data == data){
            return 1; 
        }
@@ -185,31 +190,49 @@ int deleteFromList(DListNode **theList, int data){
      */ 
 
     int d = 1; // indicates deletion or not
-    DListNode *curr, *temp, *tail, *head; 
-    curr = head = (*theList);
-    tail = head->prev;
+    DListNode *curr, *prev, *tail; 
+    curr = (*theList);
+    tail = curr->prev;
 
     while (curr != tail){
 
         // if a match is found
         if (curr->data == data){ 
-            curr->prev->next = curr->next; // rewire appropriately 
-            if (curr == head){ 
+            d = 0; // update "deleted" indicator
+            
+            // if not at the head of the list
+            if (curr->prev != tail){
+                // rewire appropriately 
+                curr->prev->next = curr->next;
+                curr->next->prev = curr->prev;
                 // get rid of the data
-                head = curr->next;
-                head->prev = curr->prev;
-                *theList = head;
-                curr = head;
                 free(curr);
+                // update curr, not prev (since node was deleted)
+                curr = prev->next;
             }
-            else { 
-                temp = curr->next;
+
+            else { // at head of list 
+
+                *theList = (*theList)->next; // reassign head
+                (*theList)->prev = curr->prev;
+                tail = (*theList)->prev;
                 free(curr);
-                curr = temp;
+                curr = (*theList);
             }
-            d = 0; // update deleted indicator
         }
-        else{ curr = curr->next; } // current becomes next }
+
+        // no match, keep parsing
+        else {
+            prev = curr;
+            curr = curr->next; // current becomes next
+        }
+    }
+    
+    if (curr->data == data){
+        curr->prev->next = (*theList);
+        (*theList)->prev = curr->prev;
+        free(curr);
+        d = 0;
     }
     return d;
 }
