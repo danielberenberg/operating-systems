@@ -30,7 +30,7 @@ void printListReverse(DListNode *theList){
      */         
      
      // iterate through the list
-     while(theList != NULL){
+     while(theList->next != NULL){
         theList = theList->next;
      }
 
@@ -43,7 +43,7 @@ void printListReverse(DListNode *theList){
       
 }
 
-void createNode(DListNode **node, int data, DListNode **next, DListNode **prev){
+void createNode(DListNode **node, int data, DListNode *next, DListNode *prev){
     /*
      * Allocate memory for and populate the fields of a new
      * Doubly Linked List node. Intentionally left out of .h as a private API
@@ -61,8 +61,8 @@ void createNode(DListNode **node, int data, DListNode **next, DListNode **prev){
      DListNode *n;
      n = (DListNode *) malloc(sizeof(DListNode));
      n->data = data;
-     n->next = *next;
-     n->prev = *prev;
+     n->next = next;
+     n->prev = prev;
      *node = n; 
 }
 
@@ -90,7 +90,7 @@ int insertAtEnd(DListNode **theList, int data){
     }
 
     DListNode *node;
-    createNode(&node, data,NULL,&curr); 
+    createNode(&node, data,NULL, curr); 
     curr->next = node;
 
     return 0;
@@ -122,18 +122,23 @@ int insertSorted(DListNode **theList, int data){
 
     DListNode *curr = (*theList);
     DListNode *node;
-    if (curr->data > data){
-        createNode(&node, data, &curr, NULL);
+    if (data < curr->data){
+        createNode(&node, data, curr, NULL);
         *theList = node;
         return 0;
     }
 
-    while (curr->next != NULL && curr->next->data < data){
+    while (curr->next != NULL){
+        if (data < curr->next->data){
+            createNode(&node, data, curr->next, curr);
+            curr->next->prev = node;
+            curr->next = node;
+            return 0;
+        }
         curr = curr->next;
     }
-
-    createNode(&node, data, &curr->next, &curr);
-    curr->next->prev = node;
+    
+    createNode(&node, data, NULL, curr);
     curr->next = node;
     return 0; 
 }
@@ -149,7 +154,12 @@ int isInList(DListNode *theList, int data){
     * returns:
     *     :(int) - 1 if data is contained, 0 otherwise
     */ 
-    return 0;
+     // iterate through the list
+     while (theList != NULL){
+        if (theList->data == data){ return 1; }
+        theList = theList->next;
+     }
+     return 0;
 }
 
 int deleteFromList(DListNode **theList, int data){
@@ -163,5 +173,49 @@ int deleteFromList(DListNode **theList, int data){
      * returns:
      *     :(int) - 0 on successful deletion, 1 otherwise
      */ 
-    return 0;
+    
+    int d = 1; // set deletion marker to "no successful deletion"
+    DListNode *curr, *prev;
+    curr = (*theList);
+    prev = NULL;
+    if (curr == NULL){
+        return 1; 
+    }
+    if (curr->next == NULL && curr->data == data){
+       *theList = NULL; 
+       free(curr);
+       return 0;
+    }
+
+    while (curr != NULL){
+        if (curr->data == data){
+            d = 0;
+            if (prev != NULL){
+                // rewire the nodes
+                if (curr->next != NULL){
+                    prev->next = curr->next;
+                    curr->next->prev = prev;
+                }
+                else {
+                    prev->next = NULL;
+                }
+
+                // get rid of the data     
+                free(curr);
+                // update curr, not prev
+                curr = prev->next;
+            }
+            else { // at the head of the list 
+                if (curr->next != NULL){ curr->next->prev = NULL; }
+                *theList = (*theList)->next; // reassign head
+                free(curr);
+                curr = (*theList);
+            }
+        }
+        else {
+            prev = curr;       // prev --> current
+            curr = curr->next; // curr bexcomes next
+        }
+    }
+    return d;
 }
