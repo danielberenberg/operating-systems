@@ -84,15 +84,14 @@ int insertAtEnd(DListNode **theList, int data){
         return 0;
     }
 
-    DListNode *curr = *theList;
+    DListNode *curr;
+    curr = *theList;
     while (curr->next != NULL){
         curr = curr->next;
     }
 
     DListNode *node;
-    createNode(&node, data,NULL,&curr); 
-    curr->next = node;
-
+    createNode(&node, data, 
     return 0;
 }
 
@@ -116,25 +115,6 @@ int insertSorted(DListNode **theList, int data){
      */
     
     // populate a null list
-    if ((*theList) == NULL){
-        return insertAtEnd(theList, data);
-    }
-
-    DListNode *curr = (*theList);
-    DListNode *node;
-    if (curr->data > data){
-        createNode(&node, data, &curr, NULL);
-        *theList = node;
-        return 0;
-    }
-
-    while (curr->next != NULL && curr->next->data < data){
-        curr = curr->next;
-    }
-
-    createNode(&node, data, &curr->next, &curr);
-    curr->next->prev = node;
-    curr->next = node;
     return 0; 
 }
 
