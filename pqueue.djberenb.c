@@ -46,7 +46,7 @@ int enqueue(PQueue *pq, int priority, void *data){
        return 0;
     }
     // input has lowest priority in all of queue
-    if (pq->tail->priority < priority){
+    if (pq->tail->priority <= priority){
         createNode(&node, priority, data, NULL);
         pq->tail->next = node;
         pq->tail = node;
@@ -55,13 +55,16 @@ int enqueue(PQueue *pq, int priority, void *data){
     // input will appear somehwere in the middle of the queue
     PQueueNode *curr, *prev;
     curr = pq->head;
+    prev = NULL;
     // find the location to place the node
     while (priority >= curr->priority){
         prev = curr;
         curr = curr->next;
     } // loop finishes fixed on the node that will directly follow input
     createNode(&node, priority, data, curr);
-    prev->next = node;
+    if (prev != NULL){
+        prev->next = node;
+    }
     return 0;
 
 }
@@ -117,10 +120,13 @@ int printQueue(PQueue *pq){
     printf("( ");
     while (curr != NULL){
         data = (DataNode *) curr->data;
-        printf("[%d|%s] ",curr->priority, data->name);
+        printf("[%d|%s]",curr->priority, data->name);
+        if (curr->next != NULL){
+            printf("-->");
+        }
         curr = curr->next;
     }
-    printf(")\n");
+    printf(" )\n");
     return 0;
 }
 
