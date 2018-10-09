@@ -2,6 +2,29 @@
 #include <stdio.h>
 #include <stdlib.h>
 
+void createNode(PQueueNode **node, int priority, void *data, PQueueNode *next){
+    /*
+     * Allocate memory for and populate the fields of a new
+     * Priority Queue node. Intentionally left out of .h as a private API
+     *
+     * args:
+     *     :PQueueNode **node - memory location for this new node
+     *     :int priority      - priority of the node
+     *     :void *data        - the data that we want to store
+     *     :PQueueNode *next  - pointer to the next node in the priority queue
+     *
+     * returns:
+     *     :(void)
+     */
+
+     PQueueNode *n;
+     n = (PQueueNode *) malloc(sizeof(PQueueNode));
+     n->data = data;
+     n->next = next;
+     n->priority = priority;
+     *node = n; 
+}
+
 int enqueue(PQueue *pq, int priority, void *data){
 /* put node in queue in priority order;
  *  - in case of tie in priority, input node is placed at
@@ -14,8 +37,33 @@ int enqueue(PQueue *pq, int priority, void *data){
  * returns:
  *     : 0 always
  */
-    printf("[enqueue] not implemented!\n");
+    PQueueNode *node;
+    // empty queue!
+    if (pq->head == NULL){
+       createNode(&node, priority, data, NULL); 
+       pq->head = node;
+       pq->tail = node;
+       return 0;
+    }
+    // input has lowest priority in all of queue
+    if (pq->tail->priority < priority){
+        createNode(&node, priority, data, NULL);
+        pq->tail->next = node;
+        pq->tail = node;
+        return 0;
+    }
+    // input will appear somehwere in the middle of the queue
+    PQueueNode *curr, *prev;
+    curr = pq->head;
+    // find the location to place the node
+    while (priority >= curr->priority){
+        prev = curr;
+        curr = curr->next;
+    } // loop finishes fixed on the node that will directly follow input
+    createNode(&node, priority, data, curr);
+    prev->next = node;
     return 0;
+
 }
 
 void *dequeue(PQueue *pq){
@@ -29,8 +77,27 @@ void *dequeue(PQueue *pq){
  * returns:
  *     :void * -- the data, NULL if queue is empty
  */
-    printf("[dequeue] not implemented!\n");
-    return NULL;
+    // the queue is empty
+    if (pq->head == NULL){
+        return NULL;
+    }
+    void *data = pq->head->data;
+    PQueueNode *nxt, *head;
+    head = pq->head;
+    nxt = pq->head->next;
+    
+    // have a priority queue of length 1, will become 0
+    // ==> need to update the tail to NULL
+    if (pq->tail == pq->head){
+        pq->tail = NULL; 
+    }
+    // erase the head
+    free(head);
+    // next element becomes the head 
+    pq->head = nxt;
+
+    return data;
+    
 }
 
 int printQueue(PQueue *pq){
@@ -41,8 +108,20 @@ int printQueue(PQueue *pq){
  *   returns:
  *          :0 always 
  */ 
-    printf("[printQueue] not implemented!\n");
-    return -999;
+    PQueueNode *curr;
+    DataNode *data;
+    curr = pq->head;
+    if (curr == NULL){
+        printf("( )\n");
+    }
+    printf("( ");
+    while (curr != NULL){
+        data = (DataNode *) curr->data;
+        printf("[%d|%s] ",curr->priority, data->name);
+        curr = curr->next;
+    }
+    printf(")\n");
+    return 0;
 }
 
 void *peek(PQueue *pq){
@@ -52,8 +131,10 @@ void *peek(PQueue *pq){
  *  returns:
  *     :data of first node in the queue, NULL if empty
  */
-    printf("[peek] not implemented!\n");
-    return NULL;
+    if (pq->head == NULL){
+        return NULL;
+    }
+    return pq->head->data;
 }
 
 int getMinPriority(PQueue *pq){
@@ -63,6 +144,8 @@ int getMinPriority(PQueue *pq){
  *   returns:
  *       :priority of first node, -1 if empty
  */
-    printf("[getMinPriority] not implemented!\n");
-    return -999;
+    if (pq->head == NULL){
+        return -1;
+    }
+    return pq->head->priority;
 }

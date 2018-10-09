@@ -165,7 +165,7 @@ void pqueue_test_3() {
 
     pqueue.head = NULL;
     pqueue.tail = NULL;
-
+    
     numvals = 10;
     for (i=0; i<numvals; ++i){
         ival = vals[i];
@@ -173,14 +173,15 @@ void pqueue_test_3() {
         data = (DataNode *) malloc(sizeof(DataNode));
         strcpy(data->name, buf);
         enqueue(&pqueue, ival, data);
-
+        printQueue(&pqueue);
         if (i%2 == 0) {
             priority = getMinPriority(&pqueue);
             data = (DataNode *) dequeue(&pqueue);
             if (data != NULL){
-                printf("dequeued %d %s\n",priority, data->name);
+                printf("dequeued [%d|%s]\n",priority, data->name);
             }
         }
+        printQueue(&pqueue);
     }
     printQueue(&pqueue);
     for (i=0; i<6; ++i){
@@ -207,7 +208,7 @@ void pqueue_test_4() {
     numvals = 5;
     pqueue.head = NULL;
     pqueue.tail = NULL;
-
+    printf("defined some shit in test 4\n");
     for (i=0; i<numvals; ++i){
         ival = vals[i];
         sprintf(buf, "%dA", ival);
