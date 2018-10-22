@@ -2,3 +2,7 @@
 main
 a.out
 *.o
+out/
+*.aux
+*.log
+
