@@ -34,8 +34,9 @@
 \section*{Overview}
 This document serves to characterize the high level design of the CPU scheduler discrete event simulation (DES). 
 A discrete event simulation is one that attempts to codify and categorize the behavior of complex systems as an
-ordered sequence of well-defined events.
-The DES system is designed with various goals in mind, prioritized in the following order:
+ordered sequence of well-defined events. Much of this document relies on the description of the system found in the 
+assignment and event descriptions provided. This document assumes these description as a priori knowledge.
+The DES system will be implemented with various goals in mind, prioritized in the following order:
 \begin{description}
     \item[Correctness]
         {The simulation should be correct.
@@ -66,7 +67,92 @@ The DES system is designed with various goals in mind, prioritized in the follow
         storage does not become an issue.
         }
 \end{description}
+See below for a detailed description of the structures that describe the components of the DES system and further documentation
+regarding some of the mechanics of the components' interactions and other routines/procedures that may be of interest.
 \section*{System Description}
+This section describes the DES system's components, their behavior and interactions, and other procdures of interest in the system. Each of these
+objects will have access to a global set of variables, namely several of the command line arguments entered to initialize the system:
+\begin{description}
+    \item[\texttt{QUANTUM}]{The length of a time slice in the system.}
+    \item[\texttt{SWITCHTIME}]{The time penalty to perform a context switch.}
+    \item[\texttt{STOPTIME}]{The maximum timestep the system should run until.}
+\end{description}
+\subsection*{Components, behavior, interactions}
+Below is a description of each structure/class of that comprises the DES system. The organization of these descriptions roughly starts with the
+objects that system \textbf{interacts with} and increases \textbf{in order of authority} downwards. It's important to note that the design of the
+system could be subject to change in an effort to better accomplish some subset of the goals described in the Overview section.
+
+\subsubsection*{Process}
+A \textbf{Process} represents a single process in the system. This class is essentially a package of various data points that is shuffled
+around the system and manipulated as the simulation marches forward. An instance of a \textbf{Process} $p$ the following attributes, initialized
+upon construction:
+\begin{description}
+    \item[$p.\texttt{type}$]{\texttt{(const, string)} The process name for $p$. Passed in as argument.}
+    \item[$p.\texttt{burst\_cpu}$]{\texttt{(const, int)} The length of time $p$ sprints on the CPU\@. Passed in as argument.}
+    \item[$p.\texttt{burst\_io}$]{\texttt{(const, int)} The length of time $p$ takes to perform I/O\@. Passed in as argument.}
+    \item[$p.\texttt{demand}$]{\texttt{(int)} The current number of timesteps that $p$ has left to run before exiting the system. 
+                               The system will update this value appropriately as it is processed on a CPU\@. Passed in as argument.}
+
+    \item[$p.\texttt{cpu\_current}$]{\texttt{int} Initialized as a null field. 
+                                     The current CPU on which $p$ is running. 
+                                     If $p$ stands in the ready queue, then $p.\texttt{cpu\_current}$ is null.}
+
+    \item[$p.\texttt{arrival\_time}$]{\texttt{(const, int)} The time that $p$ entered the system.}
+
+    \item[$p.\texttt{next\_arrival}$]{\texttt{int} The timestep of the next arrival of a new process with the same \texttt{type}. Value is 
+        set on construction. If there \texttt{next\_arrival} is -1, then a new process of such a \texttt{type} will not be initialized for the
+        rest of the duration of the system. As $p$ leaves the system (finishes being processed), a new process with the same \texttt{type} will
+        enter an \texttt{arrival\_time} of \texttt{next\_arrival}}
+\end{description}
+\textbf{Processes} will appear in many parts of the program: scheduled on \textbf{CPU}s, standing in the ready queue, referenced by \textbf{Event}s, but
+they will be modified/moved by a single governing source, the \textbf{Clock}.
+
+\subsubsection*{Event}
+A \textbf{Event} $e_{t}$ represents the event that occurs at time $t$.
+Event $e_{i}$ is composed of two attributes, a \textbf{Process} $p$ and a integral timestep $t$. 
+The attribute $p$ is necessary so that when $e_{t}$ is dequeued, we can easily access and manipulate the process that is responsible for $e_{t}$.
+The attribute $t$ is the priority of $e_{i}$. It is placed in the EventQueue based on $t$.
+\subsubsection*{ProcessFactory}
+A \textbf{ProcessFactory} creates new processes that will be added to the ready queue. The major point of the \textbf{ProcessFactory} is that it
+contains an associative array \texttt{procmap} (hashmap, dictionary, or something similar) that maps process types to their respective average 
+CPU and I/O burst times, average interarrival times, and average overall CPU demand durations. The \textbf{ProcessFactory} has single method
+called \texttt{observe}$(string procType)$ that returns an instance of a \texttt{Process}, where each of its fields are initialized to values
+pulled from random distributions (exponential or uniform, depending on the field) with centers found in $\texttt{procmap}[procType]$. The 
+\textbf{ProcessFactory} is also responsible for reading the procedure generation file and cataloguing the various types of processes.
+
+\subsubsection*{Queue}
+The abstract base classes for the ready and event queues. Contains objects of some arbitrary type. 
+\subsubsection*{ReadyQueue}
+A simple linked list of \textbf{Process}es. Extends \textbf{Queue}. Holds and releases \textbf{Process}es for dispatch into the system.
+\subsubsection*{EventQueue}
+The queue of \textbf{Event}s. This child of \textbf{Queue} is always in sorted order with respect to the priority of each \textbf{Event} that
+resides within it.
+\subsubsection*{CPU}
+A \textbf{CPU} is an object that will directly interface with \textbf{Process}es pulled from the \textbf{ReadyQueue}. As such, the \textbf{CPU}
+has a member variable called \texttt{proc} that represents the current process running on this \textbf{CPU}. The \textbf{CPU} object has a single
+method called \texttt{update()} that looks at the current timestep of the simulation and updates various fields of $\texttt{proc}$ accordingly.
+The context switch time is factored into the processing time of \texttt{proc} by considering it in the update equation for the various fields
+of \texttt{proc}.
+The \textbf{CPU} object also contains a few running counters for post processing statistics such as \texttt{time\_spent\_idle}, \texttt{total\_context\_switch},
+and possibly others.
+
+\subsubsection*{Clock}
+The \textbf{Clock} object drives the system. The \textbf{Clock} object contains a current time $\texttt{timestep}$ that describes the temporal
+position of the simulation and runs until $\texttt{timestep}$ reaches or exceeds STOPTIME, the program ends. The \textbf{Clock} contains the logic
+that dispatches \textbf{Process}es from the \textbf{ReadyQueue} to some \textbf{CPU}, the logic that generates new events based on the I/O, burst, and
+demand regimes of incoming \textbf{Process}es, and contains the code responsible for calling each of the CPU \texttt{update} methods. The \textbf{Clock}
+object will also be responsible for reporting verbose outputs.
+\subsection*{Tracker}
+This is element of the system may collapse into the \textbf{Clock} object detailed above but for the sake of modularity it will be described as a separate
+entity. This object contains tracking statistics about the system over the course of the simulation, such as the length of the ready and event queues at time $t$,
+the total list of \textbf{Event}s/\textbf{Process}es that took place, etc.
+
+\subsection*{Procedures and routines}
+There are two routines that will be highlighted in this section, the startup and shutdown procedures. On startup, the input arguments are first validated and sanitized.
+Subsequently, a \textbf{ProcessFactory} reads and catalogues the contents of the input procedure generation file. Seed processes for each type of process are generated and
+added to the ready/event queues. From there the system proceeds as described, instantiating new processes, dispatching to \textbf{CPU}s, recording information, etc. At shutdown,
+either by keyboard interrupt or normal termination, the program will write to disk some version of an ad-hoc summary of the simulation for later analysis. 
+
 \section*{Sources}
 \begin{itemize}
     \item Discrete Event Simulator Description \\ 
