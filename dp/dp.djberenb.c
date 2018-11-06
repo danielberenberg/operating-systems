@@ -57,9 +57,15 @@ void *philosopher_good(void *param){
             printf("(good) [P%d] thinking for %d secs\n", *myID, THINK_TIME); 
             sleep(THINK_TIME);
         }
-        else {pthread_mutex_unlock(&forks[left]); pthread_mutex_unlock(&forks[right]);}
+        else {
+            if (left_clear){
+                pthread_mutex_unlock(&forks[left]); 
+            }
+            if (right_clear){
+                pthread_mutex_unlock(&forks[right]);
+            }
+        }
     }
-
 }
 
 
