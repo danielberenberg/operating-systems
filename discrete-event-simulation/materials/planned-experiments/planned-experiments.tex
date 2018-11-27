@@ -1,0 +1,47 @@
+\documentclass{article}
+\usepackage{fancyhdr}
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath}
+\usepackage{amsfonts}
+\usepackage{graphicx}
+\usepackage{subcaption}
+\usepackage{algorithmicx}
+\usepackage[noend]{algpseudocode}
+\usepackage{algorithm}
+\usepackage{subcaption}
+\usepackage{amsthm}
+\usepackage{mathtools}
+
+\usepackage{hyperref}
+\hypersetup{colorlinks=true,
+    linkcolor=blue,
+    filecolor=magenta,
+    urlcolor=cyan,}
+
+\newcommand{\polyred}{\leq_{\mathrm{p}}}
+\newcommand{\polyeq}{\equiv_{\mathrm{p}}}
+\newcommand{\sprev}{S_{\mathrm{prev}}}
+
+\DeclarePairedDelimiter{\ceil}{\lceil}{\rceil}
+\newtheorem*{claim*}{Claim}
+
+\pagestyle{fancy}
+\lhead{CS 201: Operating Systems \\ \textbf{Instructor}: Jason Hibbeler \\ \textit{Discrete Event Simulator}}
+\rhead{UVM, Fall 2018 \\ \textbf{Name}: Daniel Berenberg \\ \textit{Deliverable \# 2}}
+%------------------------ header ------------------------------------------------------- 
+\begin{document}
+%---------------------------------------------------------------------------------------
+I plan to analyze my system with two experiments. Each experiment seeks to profile of a certain preemption policy's 
+efficacy with respect to the number of resources (CPUs) available. 
+The question that I would like to answer with my experiments is ``does a learned, adaptive time quantum for each process minimize process wait time''?\par
+The first experiment will vary the number
+of CPUs in the system while utilizing a fixed time quantum for each process. 
+I will report the standard deviation and mean of the process wait times over the course of a run for some large number of steps $T$.
+This provides a baseline metric for process wait time. \par
+The second experiment will use a reinforcement learning approach to learning a time quantum. 
+I will again vary the number of CPUs but this time use adaptive preemption and take measures of the length of time processes were waiting during the course of the run.
+I plan to implement adaptive preemption using a linear function approximating agent. After a process leaves the system, it will be rewarded (maybe negatively) based on how long that process waited until it was completed relative to
+the amount of time it required to run. 
+The wait time updates the agent's understanding of the system and will hopefully improve over time until it reaches an acceptable minimum.\par
+Both experiments will report average metrics from many realizations of runs of the same parameter regime (i.e, for each number of CPUs, I will run $N=10$ different simulations and take the average of the results from each simulation).
+\end{document}
