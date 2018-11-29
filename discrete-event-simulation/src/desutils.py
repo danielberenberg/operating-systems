@@ -42,7 +42,7 @@ class Process(object):
         for attr in ['wait_time','num_preemptions']:
             if not hasattr(self, attr):
                 setattr(self, attr, 0)
-        self.cpu = -1
+        self.cpu = None
 
     def __eq__(self, proc):
         if isinstance(proc, Process):
@@ -50,7 +50,7 @@ class Process(object):
         return False
 
     def __str__(self):
-        return f'[Process pid={self.pid:5d} arrived @ {self.arrival_time} type={self.type}, curr_demand={self.demand}, wait_time={self.wait_time}]'
+        return f'Process pid={self.pid:5d} arrival={self.arrival_time},cpu_current={self.cpu_current} demand={self.demand} io_burst={self.burst_io}'
 
 class Event(object):
     PROCESS_SUBMITTED  = 'PROCESS_SUBMITTED'
@@ -79,7 +79,7 @@ class Event(object):
         summary = "t={0:5d} {1:>16s} pid={2:04d}".format(self.t,self.type,self.p.pid)
         if self.type == Event.PROCESS_TERMINATED:
             summary += " waitTime={}".format(self.p.wait_time)
-        return summary
+        return summary #+ ' [{}]'.format(str(self.p))
 
     def __lt__(self, t):
         return self.t < t
@@ -164,9 +164,7 @@ class ProcessFactory(object):
 
         if io:
             # length of the io burst for this proc
-            proc_instance_params['burst_io'] = self.rng.exprand(self.procmap[process_type]['burst_io']),  
-        
-        #print('[ProcessFactory._observe]: building a process')
+            proc_instance_params['burst_io'] = self.rng.exprand(self.procmap[process_type]['burst_io'])
         return Process(**proc_instance_params)
 
     @property
@@ -329,11 +327,10 @@ class DiscreteEventSimulator(object):
         """
         # update the current time
         event = self.dequeue_event()
+        #print(event.p)
         #print('handling:',event)
         self.T_last = self.T
         self.T = event.t
-        #print('cpus',[str(c) for c in self.CPUs])
-        #print('readyqueue',[str(c) for c in self.READY_QUEUE])
         # update the wait times of processes in the ready queue if there are any
         for proc in self.READY_QUEUE:
             proc.wait_time += self.T - self.T_last
@@ -343,7 +340,7 @@ class DiscreteEventSimulator(object):
         elif event.type == Event.PROCESS_DISPATCHED:
             self.handle_process_dispatched(event)
         elif event.type == Event.PROCESS_TERMINATED:
-            self.handle_process_terminated()
+            self.handle_process_terminated(event)
         elif event.type == Event.TIME_SLICE_EXPIRED:
             self.handle_timeslice_expired(event)
         elif event.type == Event.IO_REQUEST:
@@ -374,7 +371,6 @@ class DiscreteEventSimulator(object):
             # once this process is dispatched, i.e this event is processed, we can expect
             # to incur the penalty from context switching.
             next_cpu = self.CPUs[self.idle_cpu]
-            print('next_cpu = ', next_cpu)
             dispatched = Event(etype=Event.PROCESS_DISPATCHED, t=self.T, proc=process)
             self.enqueue_event(dispatched)
 
@@ -408,6 +404,7 @@ class DiscreteEventSimulator(object):
         #print('inside of PROCESS_DISPATCHED: idle_cpus={}'.format(self.idle_cpu)) 
         process = event.p
         if self.idle_cpu is not None:
+            #print('idle idx: ',self.idle_cpu)
             # perform context_switch
             self.T += self.CONTEXT_SWITCH
             process.cpu = self.idle_cpu
@@ -432,7 +429,6 @@ class DiscreteEventSimulator(object):
                     self.enqueue_event(e)
         else:
             # enqueue the process into the ready queue, no event is recorded
-            #print('bad dispatch')
             self.enqueue_process(process)
 
 
@@ -447,7 +443,7 @@ class DiscreteEventSimulator(object):
         process = event.p
         process.demand = 0        
         process.cpu_current = 0
-        self.CPUs[self.process.cpu] = None
+        self.CPUs[process.cpu] = None
         process.cpu = -1
     
     def handle_timeslice_expired(self, event):
@@ -462,13 +458,10 @@ class DiscreteEventSimulator(object):
            - dequeue the next process from the ready queue, assign it to the CPU (follow process dispatched protocol)
         """
         process = event.p
-        print('handling timeslice expired')
         # pop process off of CPUs, rplace with new proc
         next_proc = self.dequeue_process()
-        next_proc.cpu = process.cpu
-        print(process,next_proc)
-        self.CPUs[next_proc.cpu] = next_proc
-        process.cpu = -1
+        self.CPUs[process.cpu] = None
+        process.cpu = None
 
         e = Event(etype=Event.PROCESS_DISPATCHED,t=self.T, proc=next_proc)
         self.enqueue_event(e)
@@ -477,7 +470,6 @@ class DiscreteEventSimulator(object):
         process.demand -= self.QUANTUM 
         process.cpu_current -= self.QUANTUM
         self.enqueue_process(process)
-        print('[handle_timeslice_expired] readyqueue :',[str(c) for c in self.READY_QUEUE])
 
     def handle_io_request(self, event):
         """
@@ -490,8 +482,12 @@ class DiscreteEventSimulator(object):
         """
         process = event.p
         process.demand -= process.cpu_current
+        self.CPUs[process.cpu] = None
+        process.cpu = None
+        next_proc = self.dequeue_process()
+        e = Event(etype=Event.PROCESS_DISPATCHED,t=self.T, proc=next_proc)
+        self.enqueue_event(e)
         # reset time remaining to next io burst
-        process.cpu_current = process.burst_cpu
         e = Event(etype=Event.IO_COMPLETE, t=self.T + process.burst_io, proc=process)
         self.enqueue_event(e)
 
@@ -504,6 +500,7 @@ class DiscreteEventSimulator(object):
             --> no event is created, just append to back of queue
         """
         process = event.p
+        process.cpu_current = process.burst_cpu
         self.enqueue_process(process)
 
     def initialize(self):
@@ -525,7 +522,7 @@ class DiscreteEventSimulator(object):
         if not self.initialized:
             for ptype in self.factory:
                 proc_instance = self.factory(ptype, 0)
-                print('[ProcessFactory.initialize]: ',proc_instance)
+                #print('[ProcessFactory.initialize]: ',proc_instance)
                 proc_instance.arrival_time = 0  # set the submission time for seed procs
                 # submit this seed proc to 
                 e = Event(etype=Event.PROCESS_SUBMITTED, t=0, proc=proc_instance)

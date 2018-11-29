@@ -43,7 +43,7 @@ def parse_args():
 
     parser.add_argument('--quantum','-q',
                         dest='quantum',
-                        default=0,
+                        default=1,
                         help='Quantum for pre-emptive scheduling',
                         type=int)
 
@@ -104,7 +104,7 @@ if __name__ == '__main__':
     while system_clock < system_clock.STOPTIME:
         occurred = system_clock.handle_event()
         print(occurred)
-        print('cpu slots ({}/{}): '.format(len([cpu for cpu in system_clock.CPUs if cpu is not None]), 
-                                           len(system_clock.CPUs)),[str(c) for c in system_clock.CPUs])
+        #print('cpu slots ({}/{}): '.format(len([cpu for cpu in system_clock.CPUs if cpu is not None]), 
+        #                                   len(system_clock.CPUs)),[str(c) for c in system_clock.CPUs])
                 
 
