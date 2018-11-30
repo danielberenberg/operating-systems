@@ -3,195 +3,6 @@ from math import log, floor
 import heapq
 import time
 
-class Process(object):
-    __slots__ = ['type','burst_cpu','burst_io',
-                 'demand','cpu_current','arrival_time',
-                 'wait_time','num_preemptions','pid',
-                 'cpu']
-
-    def __init__(self, **proc_attrs):
-        """
-        Initialize a Process with the specified attributes.
-
-        Attributes should be in the above specified 
-        __slots__ list or an AttributeError will be thrown. 
-        
-        attributes:
-            :type (str) - process type
-            :cpu (int) - the index of the cpu that the process is located on
-            :demand (int) - total time left
-            :burst_cpu (int) - burst cpu time
-            :burst_io (int)  - length of io burst; if None then behavior will change,
-                - namely burst_cpu implicitly becomes demand
-            :cpu_current (int) - time until next io burst (if exists)
-            :arrival_time (int) - time of arrival into system
-            :wait_time (int) - length of time spent in ready queue
-            :num_preemptions (int) - amount of time kicked off of CPU
-            :pid (int) - process id
-        """
-        for attr in proc_attrs:
-            setattr(self, attr, proc_attrs[attr])
-
-        if not hasattr(self, 'burst_io'):
-            self.cpu_current = self.burst_cpu = self.demand
-        else:
-            self.cpu_current = self.burst_cpu
-
-        # wait_time and num_preemptions should be initialized to 0 if
-        # they haven't already been;
-        for attr in ['wait_time','num_preemptions']:
-            if not hasattr(self, attr):
-                setattr(self, attr, 0)
-        self.cpu = None
-
-    def __eq__(self, proc):
-        if isinstance(proc, Process):
-            return all(getattr(self, attr) == getattr(proc, attr) for attr in self.__slots__)
-        return False
-
-    def __str__(self):
-        return f'Process pid={self.pid:5d} arrival={self.arrival_time},cpu_current={self.cpu_current} demand={self.demand} io_burst={self.burst_io}'
-
-class Event(object):
-    PROCESS_SUBMITTED  = 'PROCESS_SUBMITTED'
-    PROCESS_DISPATCHED = 'PROCESS_DISPATCHED'
-    PROCESS_TERMINATED = 'PROCESS_TERMINATED'
-    TIME_SLICE_EXPIRED = 'TIME_SLICE_EXPIRED'
-    IO_REQUEST         = 'IO_REQUEST'
-    IO_COMPLETE        = 'IO_COMPLETE'
-
-    def __init__(self, etype, t, proc):
-        """
-        Initialize an event at a specific timestep that
-        involves a specific process and a specific type 
-        of event.
-
-        args:
-            :etype (str) - the event occurring
-            :t (int) - the timestep the event takes place at
-            :proc (Process) - the process that this event involves
-        """
-        self.type = etype
-        self.t    = t
-        self.p    = proc
-        
-    def __str__(self):
-        summary = "t={0:5d} {1:>16s} pid={2:04d}".format(self.t,self.type,self.p.pid)
-        if self.type == Event.PROCESS_TERMINATED:
-            summary += " waitTime={}".format(self.p.wait_time)
-        return summary #+ ' [{}]'.format(str(self.p))
-
-    def __lt__(self, t):
-        return self.t < t
-
-    def __le__(self, t):
-        return self.t <= t
-
-    def __gt__(self, t):
-        return self.t > t
-    
-    def __ge__(self, t):
-        return self.t >= t
-
-
-class ProcessFactory(object):
-    def __init__(self, pgfile,rng):
-        """
-        Creates a ProcessFactory, an object used
-        to spin up new instances of processes.
-
-        The ProcessFactory is responsible for reading
-        the process generation file and validating the lines.
-        Namely, each row should be space delimited 5 tuples 
-        of string then 4 ints.
-
-        Columns should be:
-        name avg_demand avg_cpuburst avg_iarriv avg_io
-        
-        args:
-            :pgfile (str) - the input validated process generation file
-            :rng (RandomNumberGenerator) 
-        """
-        self.procmap = dict()
-        self.rng = rng
-        self._i = 0
-        self._process_id = 0
-        with open(pgfile, 'r') as pgf:
-            lines = map(lambda line: line.strip(), pgf.readlines())
-            self.ntypes = int(next(lines))
-            for i,row in enumerate(lines, 1):
-                row = row.split()
-                try:
-                    name = row[0]    
-                    cpu_tot, cpu_burst, iarriv, io_burst = map(int, row[1:])
-                except ValueError as e:
-                    sys.exit(f'[!] [{pgfile}] - Malformed process description at row {i}')
-                self.procmap[name] = {'type':name, 'demand':cpu_tot, 'burst_cpu':cpu_burst, 
-                                      'arrival_time':iarriv, 'burst_io':io_burst}
-
-        self.process_types = list(self.procmap.keys())
-        if self.ntypes != len(self.process_types):
-            print(f'[?] Inconsistent description of file; found ntypes={self.ntypes} but number of types found is {len(self.process_types)}')
-
-    def _observe(self, process_type, last_time,io=True):
-        """
-        Spins a new process.
-        CPU service time, I/O burst time, interarrival time are drawn from exponentials
-        while CPU burst time is drawn from a uniform distribution in the interval 
-                    [1, 2*self.procmap[process_type]['cpu_burst']].
-        args:
-            :process_type (str) - the process type to instantiate
-            :last_time (int) - the last time a process of this type occurred
-            :io (bool) - enable/disable io faults
-        returns:
-            :Process with demand, bursts, arrival, etc drawn from the appropriate
-             distributions
-        raises:
-            :ValueError if process_type not in self.procmap.keys()
-        """
-        if process_type not in self.procmap:
-            raise ValueError(f'[!] {process_type} not in {list(self.procmap.keys())}')
-        
-        proc_instance_params = {'type':process_type, # the name of the process
-                                # cpu demand for this proc
-                                'demand':self.rng.exprand(self.procmap[process_type]['demand']), 
-                                # when this proc is submitted
-                                'arrival_time':last_time + self.rng.exprand(self.procmap[process_type]['arrival_time']), 
-                                # length of time this proc will have burst cpu
-                                'burst_cpu':self.rng.urand(1, 2 * self.procmap[process_type]['burst_cpu']),
-                                # pid
-                                'pid':self.new_pid} 
-
-        if io:
-            # length of the io burst for this proc
-            proc_instance_params['burst_io'] = self.rng.exprand(self.procmap[process_type]['burst_io'])
-        return Process(**proc_instance_params)
-
-    @property
-    def new_pid(self):
-        self._process_id += 1
-        return self._process_id - 1
-
-    def __contains__(self, proctype):
-        return proctype in self.process_types
-
-    def __iter__(self):
-        return self
-    
-    def __next__(self):
-        try:
-            self._i += 1
-            return self.process_types[self._i - 1]
-        except IndexError:
-            self._i = 0
-            raise StopIteration
-            
-    def __call__(self, process_type, last_time, io=True):
-        return self._observe(process_type, last_time)
-        
-    def __str__(self):
-        return 'Process Factory ({} proc. types)'.format(len(self.procmap))
-
 class RandomNumberGenerator(object):
     def __init__(self, seed=None):
         """
@@ -259,18 +70,260 @@ class RandomNumberGenerator(object):
         c = self.drand() * (b - a) + a
         return int(round(c))
 
+class Process(object):
+    __slots__ = ['type','burst_cpu','burst_io',
+                 'demand','cpu_current','arrival_time',
+                 'wait_time','num_preemptions','pid',
+                 'cpu']
+
+    def __init__(self, **proc_attrs):
+        """
+        Initialize a Process with the specified attributes.
+
+        Attributes should be in the above specified 
+        __slots__ list or an AttributeError will be thrown. 
+        
+        attributes:
+            :type (str) - process type
+            :cpu (int) - the index of the cpu that the process is located on
+            :demand (int) - total time left
+            :burst_cpu (int) - burst cpu time
+            :burst_io (int)  - length of io burst; if None then behavior will change,
+                - namely burst_cpu implicitly becomes demand
+            :cpu_current (int) - time until next io burst (if exists)
+            :arrival_time (int) - time of arrival into system
+            :wait_time (int) - length of time spent in ready queue
+            :num_preemptions (int) - amount of time kicked off of CPU
+            :pid (int) - process id
+        """
+        for attr in proc_attrs:
+            setattr(self, attr, proc_attrs[attr])
+        if not hasattr(self, 'burst_io'):
+            self.cpu_current = self.burst_cpu = self.demand
+        else:
+            self.cpu_current = self.burst_cpu
+
+        # wait_time and num_preemptions should be initialized to 0 if
+        # they haven't already been;
+        for attr in ['wait_time','num_preemptions']:
+            if not hasattr(self, attr):
+                setattr(self, attr, 0)
+        self.cpu = None
+
+    def __eq__(self, proc):
+        if isinstance(proc, Process):
+            return all(getattr(self, attr) == getattr(proc, attr) for attr in self.__slots__)
+        return False
+
+    def __str__(self):
+        s = f'(Process pid={self.pid:d}|arrival={self.arrival_time}|cpu_current={self.cpu_current}|demand={self.demand}' 
+        if hasattr(self,'burst_io'):
+            s += f'|io_burst={self.burst_io}'
+        s += ')'
+        return s
+
+class Event(object):
+    PROCESS_SUBMITTED  = 'PROCESS_SUBMITTED'
+    PROCESS_DISPATCHED = 'PROCESS_DISPATCHED'
+    PROCESS_TERMINATED = 'PROCESS_TERMINATED'
+    TIME_SLICE_EXPIRED = 'TIME_SLICE_EXPIRED'
+    IO_REQUEST         = 'IO_REQUEST'
+    IO_COMPLETE        = 'IO_COMPLETE'
+
+    def __init__(self, etype, t, proc):
+        """
+        Initialize an event at a specific timestep that
+        involves a specific process and a specific type 
+        of event.
+
+        args:
+            :etype (str) - the event occurring
+            :t (int) - the timestep the event takes place at
+            :proc (Process) - the process that this event involves
+        """
+        self.type = etype
+        self.t    = t
+        self.p    = proc
+        
+    def __str__(self):
+        summary = "t={0:5d} {1:>20s} {3:>5s}{2:04d}".format(self.t,self.type,self.p.pid,'pid=')
+        if self.type == Event.PROCESS_TERMINATED:
+            summary += " waitTime={}".format(self.p.wait_time)
+        return summary #+ ' [{}]'.format(str(self.p))
+
+    def __lt__(self, t):
+        return self.t < t
+
+    def __le__(self, t):
+        return self.t <= t
+
+    def __gt__(self, t):
+        return self.t > t
+    
+    def __ge__(self, t):
+        return self.t >= t
+
+class CPU(object):
+    BUSY = 1
+    IDLE = 0
+
+    def __init__(self, cpu_id):
+        """
+        Instantiate a CPU object, essentially a slot
+        for processes to run in the system;
+        
+        Each CPU can be thought of as a core that can
+        execute tasks.
+
+        attributes:
+            :id - the id of the CPU
+            :active_time (int) - time spent executing jobs
+            :context_switch_time (int) - counts time spent switching between processes
+            :idle_time (int) - length of time spent idle
+            :state - 0 == idle; 1 == busy
+            :_slot - occupied/unoccupied place for proc
+        """
+        self.id = cpu_id
+        self.active_time = self.idle_time = self.context_switch_time = 0
+        self._slot = None
+
+    @property
+    def state(self):
+        """
+        0 --> idle
+        1 --> busy
+        """
+        return int(self._slot is not None)
+
+    @property
+    def is_busy(self):
+        return self.state == CPU.BUSY
+
+    @property
+    def is_idle(self):
+        return self.state == CPU.IDLE
+    
+    def __call__(self, proc, ctx=0):
+        self._slot = proc
+        self.context_switch_time += ctx
+
+    def __invert__(self):
+        self._slot = None
+
+
+class ProcessFactory(object):
+    def __init__(self,procgen='pg.txt',rng=RandomNumberGenerator(),enable_io=True):
+        """
+        Creates a ProcessFactory, an object used
+        to spin up new instances of processes.
+
+        The ProcessFactory is responsible for reading
+        the process generation file and validating the lines.
+        Namely, each row should be space delimited 5 tuples 
+        of string then 4 ints.
+
+        Columns should be:
+        name avg_demand avg_cpuburst avg_iarriv avg_io
+        
+        args:
+            :procgen (str) - the input validated process generation file
+            :rng (RandomNumberGenerator) 
+        """
+        self.procmap = dict()
+        self.enable_io = enable_io
+        self.rng = rng
+        self._i = 0
+        self._process_id = 0
+        with open(procgen, 'r') as pgf:
+            lines = map(lambda line: line.strip(), pgf.readlines())
+            self.ntypes = int(next(lines))
+            for i,row in enumerate(lines, 1):
+                row = row.split()
+                if row:
+                    try:
+                        name = row[0]    
+                        cpu_tot, cpu_burst, iarriv, io_burst = map(int, row[1:])
+                    except ValueError as e:
+                        sys.exit(f'[!] [{procgen}] - Malformed process description at row {i}')
+                self.procmap[name] = {'type':name, 'demand':cpu_tot,
+                                      'burst_cpu':cpu_burst, 'arrival_time':iarriv}
+                if self.enable_io:
+                    self.procmap[name]['burst_io'] = io_burst
+
+        self.process_types = list(self.procmap.keys())
+        if self.ntypes != len(self.process_types):
+            print(f'[?] Inconsistent description of file; found ntypes={self.ntypes} but number of types found is {len(self.process_types)}')
+
+    def _observe(self, process_type, last_time):
+        """
+        Spins a new process.
+        CPU service time, I/O burst time, interarrival time are drawn from exponentials
+        while CPU burst time is drawn from a uniform distribution in the interval 
+                    [1, 2*self.procmap[process_type]['cpu_burst']].
+        args:
+            :process_type (str) - the process type to instantiate
+            :last_time (int) - the last time a process of this type occurred
+            :io (bool) - enable/disable io faults
+        returns:
+            :Process with demand, bursts, arrival, etc drawn from the appropriate
+             distributions
+        raises:
+            :ValueError if process_type not in self.procmap.keys()
+        """
+        if process_type not in self.procmap:
+            raise ValueError(f'[!] {process_type} not in {list(self.procmap.keys())}')
+        
+        proc_instance_params = {'type':process_type, # the name of the process
+                                # cpu demand for this proc
+                                'demand':self.rng.exprand(self.procmap[process_type]['demand']), 
+                                # when this proc is submitted
+                                'arrival_time':last_time + self.rng.exprand(self.procmap[process_type]['arrival_time']), 
+                                # length of time this proc will have burst cpu
+                                'burst_cpu':self.rng.urand(1, 2 * self.procmap[process_type]['burst_cpu']),
+                                # pid
+                                'pid':self.new_pid} 
+
+        if self.enable_io:
+            # length of the io burst for this proc
+            proc_instance_params['burst_io'] = self.rng.exprand(self.procmap[process_type]['burst_io'])
+        return Process(**proc_instance_params)
+
+    @property
+    def new_pid(self):
+        self._process_id += 1
+        return self._process_id - 1
+
+    def __contains__(self, proctype):
+        return proctype in self.process_types
+
+    def __iter__(self):
+        return self
+    
+    def __next__(self):
+        try:
+            self._i += 1
+            return self.process_types[self._i - 1]
+        except IndexError:
+            self._i = 0
+            raise StopIteration
+            
+    def __call__(self, process_type, last_time):
+        return self._observe(process_type, last_time)
+        
+    def __str__(self):
+        return 'Process Factory ({} proc. types)'.format(len(self.procmap))
+
+
 class DiscreteEventSimulator(object):
-    params = ['ctx_switch','enable_io','quantum','num_cpus','stop_time']
+    params = ['ctx_switch',
+              'enable_io',
+              'quantum',
+              'num_cpus',
+              'stop_time',
+              'rng',
+              'procgen']
 
-    def __init__(self, 
-                 process_factory,
-                 stop_time=100,
-                 ctx_switch=0,
-                 enable_io=True,
-                 quantum=0,
-                 num_cpus=1):
-
-
+    def __init__(self, **kwargs):
         """
         Initializes a DiscreteEventSimulator, the universal ticker that allows the system to run.
         -----
@@ -288,21 +341,37 @@ class DiscreteEventSimulator(object):
             :quantum - lenght of time before preemption happens
             :num_cpus - number of slots to let procs run
         """
-        self.CONTEXT_SWITCH = ctx_switch
-        self.QUANTUM = quantum
-        self.STOPTIME = stop_time
+        self.CONTEXT_SWITCH = kwargs['ctx_switch']
+        self.QUANTUM = kwargs['quantum']
+        self.STOPTIME = kwargs['stop_time']
         self.EVENT_QUEUE = [] # Priority queue
         self.READY_QUEUE = [] # FIFO queue
 
         self._initialized = False
-        self.factory = process_factory
-        self.enable_io = enable_io
-        self.cpu_count = num_cpus
+        self.factory = ProcessFactory(procgen=kwargs['procgen'],
+                                      rng=kwargs['rng'],
+                                      enable_io=kwargs['enable_io']) 
+
+        #self.factory = process_factory instantiate process factory
+        self.enable_io = kwargs['enable_io']
+        self.cpu_count = kwargs['num_cpus']
         self.T = 0
         self.T_last = self.T
+        
+        # statistics section of attributes
+        self.ready_queue_len = []
+        self.event_queue_len = []
+        self.events_processed = 0
+        self.timesteps = []
+        # the postmortem stats for each of the processes available from the factory
+        self.process_stats = {ptype:{'completed':0,
+                                     'throughput':dict(), # maps timesteps --> # procs terminated
+                                     'turnaround_times':[],
+                                     'wait_time':[],
+                                     'num_preemptions':[]} for ptype in self.factory.process_types}
 
         # initialize the slots where processes can run 
-        self.CPUs = [None for _ in range(self.cpu_count)] 
+        self.CPUs = [CPU(i) for i in range(self.cpu_count)] 
 
     @property
     def initialized(self):
@@ -327,13 +396,20 @@ class DiscreteEventSimulator(object):
         """
         # update the current time
         event = self.dequeue_event()
-        #print(event.p)
-        #print('handling:',event)
+        self.record_status()
+        # print("Running:",", ".join(str(p) for p in self.CPUs if isinstance(p, Process)))
         self.T_last = self.T
         self.T = event.t
+
         # update the wait times of processes in the ready queue if there are any
         for proc in self.READY_QUEUE:
             proc.wait_time += self.T - self.T_last
+        # update the cpu stats
+        for cpu in self.CPUs:
+            if cpu.is_idle:
+                cpu.active_time += self.T - self.T_last
+            else:
+                cpu.idle_time += self.T - self.T_last
 
         if event.type == Event.PROCESS_SUBMITTED:
             self.handle_process_submitted(event)
@@ -366,19 +442,18 @@ class DiscreteEventSimulator(object):
         args:
             :Event with type PROCESS_SUBMITTED
         """
-        process = event.p
-        if self.idle_cpu is not None:
+        process = event.p   
+        if self.idle_cpu is not None: #and self.idle_cpu is not None:
             # once this process is dispatched, i.e this event is processed, we can expect
             # to incur the penalty from context switching.
-            next_cpu = self.CPUs[self.idle_cpu]
-            dispatched = Event(etype=Event.PROCESS_DISPATCHED, t=self.T, proc=process)
+            dispatched = Event(etype=Event.PROCESS_DISPATCHED, t=self.T+1, proc=process)
             self.enqueue_event(dispatched)
 
         else: # tripped because there is no idle cpu (self.idle_cpu = None)
             # enqueue the process into the ready queue, no event is recorded
             self.enqueue_process(process)
         # generate a new PROCESS_SUBMITTED event in the event queue
-        next_proc = self.factory(process.type, self.T, io=self.enable_io)
+        next_proc = self.factory(process.type, self.T) 
         e = Event(etype=Event.PROCESS_SUBMITTED, t=next_proc.arrival_time,proc=next_proc)
         self.enqueue_event(e)
 
@@ -401,14 +476,13 @@ class DiscreteEventSimulator(object):
         args:
             :Event with type PROCESS_DISPATCHED
         """
-        #print('inside of PROCESS_DISPATCHED: idle_cpus={}'.format(self.idle_cpu)) 
         process = event.p
+        #if self.idle_cpu is not None:
         if self.idle_cpu is not None:
-            #print('idle idx: ',self.idle_cpu)
             # perform context_switch
-            self.T += self.CONTEXT_SWITCH
             process.cpu = self.idle_cpu
-            self.CPUs[self.idle_cpu] = process # assign proc to a CPU
+            self.T += self.CONTEXT_SWITCH
+            self.CPUs[self.idle_cpu](process, ctx=self.CONTEXT_SWITCH) # assign proc to a CPU
             # want to either keep the current time cpu burst time or 
             # not overshoot the demand
             process.cpu_current = min(process.cpu_current, process.demand)
@@ -420,7 +494,7 @@ class DiscreteEventSimulator(object):
                 # in this case we can either enqueue an I/O request or terminate
 
                 # terminate the process 
-                if process.cpu_current == process.demand: 
+                if process.cpu_current == process.demand or process.demand == 0: 
                     e = Event(etype=Event.PROCESS_TERMINATED, t=self.T + process.cpu_current, proc=process)
                     self.enqueue_event(e)
                 # in this case we either want to enqueue an I/O request if permissible OR
@@ -429,8 +503,9 @@ class DiscreteEventSimulator(object):
                     self.enqueue_event(e)
         else:
             # enqueue the process into the ready queue, no event is recorded
+            # this happens when there was an attempt to dispatch to a nonempty CPU
+            #print('[+] dispatched to an occupied CPU: {}'.format(self.CPUs))
             self.enqueue_process(process)
-
 
     def handle_process_terminated(self, event):
         """
@@ -439,12 +514,28 @@ class DiscreteEventSimulator(object):
         PROCESS_TERMINATED:
             --> when the time that a process has been running exceeds the quantum
             - remove from CPUs
+            - dequeue the next process and dispatch it
         """
         process = event.p
         process.demand = 0        
         process.cpu_current = 0
-        self.CPUs[process.cpu] = None
-        process.cpu = -1
+        ~self.CPUs[process.cpu]
+        process.cpu = None
+        # record the process post mortem stats for this process type
+        self.process_stats[process.type]['completed'] += 1
+        try:
+            self.process_stats[process.type]['throughput'][self.T] += 1
+        except KeyError:
+            self.process_stats[process.type]['throughput'][self.T] = 1
+        self.process_stats[process.type]['turnaround_times'].append(self.T - process.arrival_time) 
+        self.process_stats[process.type]['wait_time'].append(process.wait_time)
+        self.process_stats[process.type]['num_preemptions'].append(process.num_preemptions)
+        del process
+        if self.READY_QUEUE:
+            next_proc = self.dequeue_process()
+            e = Event(etype=Event.PROCESS_DISPATCHED,t=self.T + 1, proc=next_proc)
+            self.enqueue_event(e)
+
     
     def handle_timeslice_expired(self, event):
         """
@@ -458,18 +549,17 @@ class DiscreteEventSimulator(object):
            - dequeue the next process from the ready queue, assign it to the CPU (follow process dispatched protocol)
         """
         process = event.p
-        # pop process off of CPUs, rplace with new proc
-        next_proc = self.dequeue_process()
-        self.CPUs[process.cpu] = None
+        # pop process off of CPUs, to be replaced with new proc
+        ~self.CPUs[process.cpu]
         process.cpu = None
-
-        e = Event(etype=Event.PROCESS_DISPATCHED,t=self.T, proc=next_proc)
-        self.enqueue_event(e)
-
         process.num_preemptions += 1
         process.demand -= self.QUANTUM 
         process.cpu_current -= self.QUANTUM
         self.enqueue_process(process)
+
+        next_proc = self.dequeue_process()
+        e = Event(etype=Event.PROCESS_DISPATCHED,t=self.T+1, proc=next_proc)
+        self.enqueue_event(e)
 
     def handle_io_request(self, event):
         """
@@ -482,14 +572,16 @@ class DiscreteEventSimulator(object):
         """
         process = event.p
         process.demand -= process.cpu_current
-        self.CPUs[process.cpu] = None
+        ~self.CPUs[process.cpu]
         process.cpu = None
-        next_proc = self.dequeue_process()
-        e = Event(etype=Event.PROCESS_DISPATCHED,t=self.T, proc=next_proc)
-        self.enqueue_event(e)
         # reset time remaining to next io burst
-        e = Event(etype=Event.IO_COMPLETE, t=self.T + process.burst_io, proc=process)
-        self.enqueue_event(e)
+        io_complete = Event(etype=Event.IO_COMPLETE, t=self.T + process.burst_io, proc=process)
+        self.enqueue_event(io_complete)
+        
+        if self.READY_QUEUE:
+            next_proc = self.dequeue_process()
+            dispatch = Event(etype=Event.PROCESS_DISPATCHED,t=self.T+1, proc=next_proc)
+            self.enqueue_event(dispatch)
 
     def handle_io_complete(self, event):
         """
@@ -497,11 +589,15 @@ class DiscreteEventSimulator(object):
         ------------------
         IO_COMPLETE
             --> when I/O request finishes, moves back to ready state
-            --> no event is created, just append to back of queue
+            - either send this process to the ready queue or dispatch it
         """
         process = event.p
         process.cpu_current = process.burst_cpu
-        self.enqueue_process(process)
+        if not self.READY_QUEUE:
+            e = Event(Event.PROCESS_DISPATCHED, t=self.T+1,proc=process)
+            self.enqueue_event(e)
+        else:
+            self.enqueue_process(process)
 
     def initialize(self):
         """
@@ -520,12 +616,11 @@ class DiscreteEventSimulator(object):
         """
         # submit seed processes to the event queue
         if not self.initialized:
-            for ptype in self.factory:
+            for i, ptype in enumerate(self.factory):
                 proc_instance = self.factory(ptype, 0)
-                #print('[ProcessFactory.initialize]: ',proc_instance)
-                proc_instance.arrival_time = 0  # set the submission time for seed procs
+                proc_instance.arrival_time = i  # set the submission time for seed procs
                 # submit this seed proc to 
-                e = Event(etype=Event.PROCESS_SUBMITTED, t=0, proc=proc_instance)
+                e = Event(etype=Event.PROCESS_SUBMITTED, t=i, proc=proc_instance)
                 self.enqueue_event(e)
 
             self._initialized = True
@@ -537,9 +632,8 @@ class DiscreteEventSimulator(object):
         """
         get an idle CPU; return None if none exist
         """
-        if None in self.CPUs:
-            #print('None is found in',self.CPUs)
-            return self.CPUs.index(None)
+        if any(cpu.is_idle for cpu in self.CPUs):
+            return [i for i, cpu in enumerate(self.CPUs) if cpu.is_idle][0]
         return None
     
     def enqueue_event(self, e):
@@ -563,6 +657,15 @@ class DiscreteEventSimulator(object):
     def dequeue_process(self):
         return self.READY_QUEUE.pop(0)
 
+    def record_status(self):
+        """
+        record statistics for the system
+        """
+        self.event_queue_len.append(len(self))
+        self.ready_queue_len.append(len(self.READY_QUEUE))
+        self.timesteps.append(self.T)
+        self.events_processed += 1
+
     def __str__(self):
         return f'DES @ t={self.current_time}; procs_waiting={len(self.READY_QUEUE)}'
 
@@ -577,4 +680,6 @@ class DiscreteEventSimulator(object):
     
     def __ge__(self, i):
         return self.T >= i
-
+    
+    def __len__(self):
+        return len(self.EVENT_QUEUE)

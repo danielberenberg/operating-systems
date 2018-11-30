@@ -37,7 +37,7 @@ def parse_args():
                         help='File name for the process description file')
 
     parser.add_argument('--num-cpus','-c',
-                        dest='cpu_count',
+                        dest='num_cpus',
                         default=1,type=natural_num_gt0,
                         help='Number of CPUs')
 
@@ -89,22 +89,22 @@ args = parse_args().parse_args()
 QUANTUM, SWITCHTIME, STOPTIME = args.quantum, args.ctx_switch, args.stop_time
         
 if __name__ == '__main__':
-    # the random number generator for the simulation
-    rng = RandomNumberGenerator(seed=args.seed)
-    # if mersenne twister was specified
-    if args.mers:
-        if args.seed:
-            random.seed(args.seed)
-        rng.override_rand(random.random) 
-    factory = ProcessFactory(args.procgen, rng)
-    # filter out arguments we don't need, initialize the clock
-    args.enable_io = not args.disable_io
-    system_clock = DiscreteEventSimulator(factory, **{arg:getattr(args, arg) for arg in vars(args) if arg in DiscreteEventSimulator.params})
-    system_clock.initialize()
-    while system_clock < system_clock.STOPTIME:
-        occurred = system_clock.handle_event()
-        print(occurred)
-        #print('cpu slots ({}/{}): '.format(len([cpu for cpu in system_clock.CPUs if cpu is not None]), 
-        #                                   len(system_clock.CPUs)),[str(c) for c in system_clock.CPUs])
-                
+    try:
+        # the random number generator for the simulation
+        rng = RandomNumberGenerator(seed=args.seed)
+        # if mersenne twister was specified
+        if args.mers:
+            if args.seed:
+                random.seed(args.seed)
+            rng.override_rand(random.random) 
+        args.rng = rng
+        # filter out arguments we don't need, initialize the clock
+        args.enable_io = not args.disable_io
 
+        system_clock = DiscreteEventSimulator(**{arg:getattr(args, arg) for arg in vars(args) if arg in DiscreteEventSimulator.params})
+        system_clock.initialize()
+        while system_clock < system_clock.STOPTIME:
+            occurred = system_clock.handle_event()
+            print(occurred)
+    except KeyboardInterrupt:
+        print('\n[X] Quitting')
