@@ -1,7 +1,7 @@
 import os
 import random
 import argparse
-from desutils import Process, ProcessFactory, Event, RandomNumberGenerator, DiscreteEventSimulator
+from desutils import RandomNumberGenerator, DiscreteEventSimulator
 
 def natural_num_gt0(x):
     """make `x` an int, verify `x` > 0"""
