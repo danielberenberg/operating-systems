@@ -210,8 +210,6 @@ class CPU(object):
     def __invert__(self):
         self._slot = None
 
-    def __str__(self):
-        return f"CPU(active_time={self.active_time}, idle_time={self.idle_time}, occupied={self.is_busy})"
 
 class ProcessFactory(object):
     def __init__(self,procgen='pg.txt',rng=RandomNumberGenerator(),enable_io=True):
@@ -345,8 +343,6 @@ class DiscreteEventSimulator(object):
         """
         self.CONTEXT_SWITCH = kwargs['ctx_switch']
         self.QUANTUM = kwargs['quantum']
-        if self.QUANTUM == 0:
-            self.QUANTUM = None
         self.STOPTIME = kwargs['stop_time']
         self.EVENT_QUEUE = [] # Priority queue
         self.READY_QUEUE = [] # FIFO queue
@@ -366,11 +362,10 @@ class DiscreteEventSimulator(object):
         self.ready_queue_len = []
         self.event_queue_len = []
         self.events_processed = 0
-        self.processes_completed = 0
         self.timesteps = []
         # the postmortem stats for each of the processes available from the factory
         self.process_stats = {ptype:{'completed':0,
-                                     'throughput':dict(), # moving average of number of processes completed per t
+                                     'throughput':dict(), # maps timesteps --> # procs terminated
                                      'turnaround_times':[],
                                      'wait_time':[],
                                      'num_preemptions':[]} for ptype in self.factory.process_types}
@@ -411,7 +406,7 @@ class DiscreteEventSimulator(object):
             proc.wait_time += self.T - self.T_last
         # update the cpu stats
         for cpu in self.CPUs:
-            if cpu.is_busy:
+            if cpu.is_idle:
                 cpu.active_time += self.T - self.T_last
             else:
                 cpu.idle_time += self.T - self.T_last
@@ -451,7 +446,7 @@ class DiscreteEventSimulator(object):
         if self.idle_cpu is not None: #and self.idle_cpu is not None:
             # once this process is dispatched, i.e this event is processed, we can expect
             # to incur the penalty from context switching.
-            dispatched = Event(etype=Event.PROCESS_DISPATCHED, t=self.T, proc=process)
+            dispatched = Event(etype=Event.PROCESS_DISPATCHED, t=self.T+1, proc=process)
             self.enqueue_event(dispatched)
 
         else: # tripped because there is no idle cpu (self.idle_cpu = None)
@@ -491,12 +486,11 @@ class DiscreteEventSimulator(object):
             # want to either keep the current time cpu burst time or 
             # not overshoot the demand
             process.cpu_current = min(process.cpu_current, process.demand)
-            # builtin short circuiting should trip if self.QUANTUM == None before evaluating second half
-            if self.QUANTUM is not None and process.cpu_current > self.QUANTUM:
+            if process.cpu_current > self.QUANTUM:
                 # TIME_SLICE_EXPIRED @ self.T + self.QUANTUM
                 e = Event(etype=Event.TIME_SLICE_EXPIRED, t=self.T + self.QUANTUM, proc=process)
                 self.enqueue_event(e)
-            elif self.QUANTUM is None or process.cpu_current <= self.QUANTUM:
+            elif process.cpu_current <= self.QUANTUM:
                 # in this case we can either enqueue an I/O request or terminate
 
                 # terminate the process 
@@ -529,17 +523,20 @@ class DiscreteEventSimulator(object):
         process.cpu = None
         # record the process post mortem stats for this process type
         self.process_stats[process.type]['completed'] += 1
-        self.process_stats[process.type]['throughput'][self.T] = self.process_stats[process.type]['completed']/self.T
+        try:
+            self.process_stats[process.type]['throughput'][self.T] += 1
+        except KeyError:
+            self.process_stats[process.type]['throughput'][self.T] = 1
         self.process_stats[process.type]['turnaround_times'].append(self.T - process.arrival_time) 
         self.process_stats[process.type]['wait_time'].append(process.wait_time)
         self.process_stats[process.type]['num_preemptions'].append(process.num_preemptions)
-        self.processes_completed += 1
         del process
         if self.READY_QUEUE:
             next_proc = self.dequeue_process()
             e = Event(etype=Event.PROCESS_DISPATCHED,t=self.T + 1, proc=next_proc)
             self.enqueue_event(e)
-   
+
+    
     def handle_timeslice_expired(self, event):
         """
         handle TIME_SLICE_EXPIRED
@@ -561,7 +558,7 @@ class DiscreteEventSimulator(object):
         self.enqueue_process(process)
 
         next_proc = self.dequeue_process()
-        e = Event(etype=Event.PROCESS_DISPATCHED,t=self.T, proc=next_proc)
+        e = Event(etype=Event.PROCESS_DISPATCHED,t=self.T+1, proc=next_proc)
         self.enqueue_event(e)
 
     def handle_io_request(self, event):
@@ -583,7 +580,7 @@ class DiscreteEventSimulator(object):
         
         if self.READY_QUEUE:
             next_proc = self.dequeue_process()
-            dispatch = Event(etype=Event.PROCESS_DISPATCHED,t=self.T, proc=next_proc)
+            dispatch = Event(etype=Event.PROCESS_DISPATCHED,t=self.T+1, proc=next_proc)
             self.enqueue_event(dispatch)
 
     def handle_io_complete(self, event):
@@ -597,7 +594,7 @@ class DiscreteEventSimulator(object):
         process = event.p
         process.cpu_current = process.burst_cpu
         if not self.READY_QUEUE:
-            e = Event(Event.PROCESS_DISPATCHED, t=self.T,proc=process)
+            e = Event(Event.PROCESS_DISPATCHED, t=self.T+1,proc=process)
             self.enqueue_event(e)
         else:
             self.enqueue_process(process)
@@ -669,66 +666,21 @@ class DiscreteEventSimulator(object):
         self.timesteps.append(self.T)
         self.events_processed += 1
 
-    def finalize(self):
-        """
-        compute system/process based post mortem run statistics
-        """
+    def finalize_stats(self):
         self.SIMULATION_LEN = self.T
         self.avg_eq_len = sum(self.event_queue_len)/len(self.event_queue_len)
         self.avg_rq_len = sum(self.ready_queue_len)/len(self.ready_queue_len)
-        self.final_eq_len = self.event_queue_len[-1]
-        self.final_rq_len = self.ready_queue_len[-1]
+        self.final_rq_len = self.event_queue_len[-1]
+        self.final_eq_len = self.ready_queue_len[-1]
         for ptype in self.factory.process_types:
-            if self.process_stats[ptype]['turnaround_times']:
-                turnarounds = self.process_stats[ptype]['turnaround_times']
-                self.process_stats[ptype]['final_turnaround'] = turnarounds[-1]
-                self.process_stats[ptype]['longest_turnaround'] = max(turnarounds)
-                self.process_stats[ptype]['average_turnaround'] = sum(turnarounds)/len(turnarounds)
-
-    def summarize(self):
-        self.finalize()
-        delim = '\n' + 100 * '-' + '\n'
-        nl = '\n'
-        summary = ""
-        summary+= '=====- SIMULATION SUMMARY -=====' + nl
-        summary+= f'Simulation Length: {self.SIMULATION_LEN}' + nl
-        summary+= f'Total processes completed: {self.processes_completed}' + nl
-        summary+= f'Total events processed: {self.events_processed}' + delim
-        summary+= 'Ready Queue Statistics' + nl
-        summary+= f' > average length: {round(self.avg_rq_len)}' + nl
-        summary+= f' > final length  : {round(self.final_rq_len)}' + delim
-        summary+= 'Event Queue Statistics' + nl
-        summary+= f' > average length: {round(self.avg_eq_len)}' + nl
-        summary+= f' > final length  : {round(self.final_eq_len)}' + delim
-        summary+= 'Process Statistics' + nl
-        summary+= '{0:<11s} - {1:<10s} - {2:<15s} - {3:<15s} - {4:<15s} - {5:<15s}'.format('Type',
-                                                                                           '# Completed',
-                                                                                           'Avg. turnaround',
-                                                                                           'Max. turnaround',
-                                                                                           'Last turnaround',
-                                                                                           'Avg. wait time') + delim
-        proc_strs = []
-        for ptype in self.factory.process_types:
-            fmt = f"{ptype:<11s} | {self.process_stats[ptype]['completed']:>10d} | " 
-            try:
-                fmt = fmt + f"{round(self.process_stats[ptype]['average_turnaround']):>15d} | "
-                fmt = fmt + f"{self.process_stats[ptype]['longest_turnaround']:>15d} | "
-                fmt = fmt + f"{self.process_stats[ptype]['final_turnaround']:>15d} | "
-                fmt = fmt + f"{round(sum(self.process_stats[ptype]['wait_time'])/len(self.process_stats[ptype]['wait_time'])):>15d}"
-            except KeyError:
-                fmt = fmt + "no turnaround data" 
-            proc_strs.append(fmt)
-        summary += "\n".join(proc_strs) + delim
-        summary += 'CPU statistics' + nl
-        summary += '{0:<4s} - {1:<10s} - {2:<10s}'.format('ID','active time','idle time') + nl
-        cpu_strs = []
-        for cpu in self.CPUs:
-            cpu_strs.append(f"{cpu.id:>4d} | {cpu.active_time:>8d} | {cpu.idle_time:>8d}")
-        summary += "\n".join(cpu_strs)
-        return summary
+            turnarounds = self.process_stats[ptype]['turnaround_times']
+            self.process_stats[ptype]['final_turnaround'] = turnarounds[-1]
+            self.process_stats[ptype]['longest_turnaround'] = max(turnarounds)
+            self.process_stats[ptype]['average_tunraround'] = sum(turnarounds)/len(turnarounds)
+        
 
     def __str__(self):
-        return self.summarize()
+        return f'DES @ t={self.current_time}; procs_waiting={len(self.READY_QUEUE)}'
 
     def __lt__(self, i):
         return self.T < i

@@ -1,7 +1,4 @@
-5
+2
 interactive 20 10 80 5
-BATCH 500 250 1000 10
-SpecialTask 250 500 10 1000
-graphical 300 15 3 25  
-Firefox 200 180 600 55
+batch 500 250 1000 10
 

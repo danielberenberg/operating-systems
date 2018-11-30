@@ -1,4 +1,4 @@
-import os
+import sys, os
 import random
 import argparse
 from desutils import RandomNumberGenerator, DiscreteEventSimulator
@@ -43,7 +43,7 @@ def parse_args():
 
     parser.add_argument('--quantum','-q',
                         dest='quantum',
-                        default=1,
+                        default=0,
                         help='Quantum for pre-emptive scheduling',
                         type=int)
 
@@ -100,11 +100,20 @@ if __name__ == '__main__':
         args.rng = rng
         # filter out arguments we don't need, initialize the clock
         args.enable_io = not args.disable_io
+    except KeyboardInterrupt:
+        print('\n[X] Quitting')
 
-        system_clock = DiscreteEventSimulator(**{arg:getattr(args, arg) for arg in vars(args) if arg in DiscreteEventSimulator.params})
+    try:
+        des_params = {arg:getattr(args, arg) for arg in vars(args) if arg in DiscreteEventSimulator.params}
+        system_clock = DiscreteEventSimulator(**des_params)
         system_clock.initialize()
         while system_clock < system_clock.STOPTIME:
             occurred = system_clock.handle_event()
-            print(occurred)
+            if args.verbose:
+                print(occurred)
+        print()
+        print(system_clock)
     except KeyboardInterrupt:
-        print('\n[X] Quitting')
+        print('\n')
+        print(system_clock)
+        print('\n[X] Quitting', file=sys.stderr)
