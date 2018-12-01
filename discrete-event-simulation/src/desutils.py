@@ -74,7 +74,7 @@ class Process(object):
     __slots__ = ['type','burst_cpu','burst_io',
                  'demand','cpu_current','arrival_time',
                  'wait_time','num_preemptions','pid',
-                 'cpu']
+                 'cpu','QUANTUM']
 
     def __init__(self, **proc_attrs):
         """
@@ -85,6 +85,7 @@ class Process(object):
         
         attributes:
             :type (str) - process type
+            :QUANTUM (int) - time quantum for this process
             :cpu (int) - the index of the cpu that the process is located on
             :demand (int) - total time left
             :burst_cpu (int) - burst cpu time
@@ -116,7 +117,7 @@ class Process(object):
         return False
 
     def __str__(self):
-        s = f'(Process pid={self.pid:d}|arrival={self.arrival_time}|cpu_current={self.cpu_current}|demand={self.demand}' 
+        s = f'Process(pid={self.pid:d}|arrival={self.arrival_time}|cpu_current={self.cpu_current}|demand={self.demand}' 
         if hasattr(self,'burst_io'):
             s += f'|io_burst={self.burst_io}'
         s += ')'
@@ -210,8 +211,20 @@ class CPU(object):
     def __invert__(self):
         self._slot = None
 
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        params = [self.active_time, self.idle_time, self.context_switch_time]
+        while params:
+            yield params.pop(0)
+        raise StopIteration
+
     def __str__(self):
         return f"CPU(active_time={self.active_time}, idle_time={self.idle_time}, occupied={self.is_busy})"
+
+    def __repr__(self):
+        return str(self)
 
 class ProcessFactory(object):
     def __init__(self,procgen='pg.txt',rng=RandomNumberGenerator(),enable_io=True):
@@ -256,7 +269,7 @@ class ProcessFactory(object):
         if self.ntypes != len(self.process_types):
             print(f'[?] Inconsistent description of file; found ntypes={self.ntypes} but number of types found is {len(self.process_types)}')
 
-    def _observe(self, process_type, last_time):
+    def _observe(self, process_type, last_time, QUANTUM=1):
         """
         Spins a new process.
         CPU service time, I/O burst time, interarrival time are drawn from exponentials
@@ -283,7 +296,8 @@ class ProcessFactory(object):
                                 # length of time this proc will have burst cpu
                                 'burst_cpu':self.rng.urand(1, 2 * self.procmap[process_type]['burst_cpu']),
                                 # pid
-                                'pid':self.new_pid} 
+                                'pid':self.new_pid,
+                                'QUANTUM':QUANTUM} 
 
         if self.enable_io:
             # length of the io burst for this proc
@@ -309,8 +323,8 @@ class ProcessFactory(object):
             self._i = 0
             raise StopIteration
             
-    def __call__(self, process_type, last_time):
-        return self._observe(process_type, last_time)
+    def __call__(self, process_type, last_time, quantum=1):
+        return self._observe(process_type, last_time, QUANTUM=quantum)
         
     def __str__(self):
         return 'Process Factory ({} proc. types)'.format(len(self.procmap))
@@ -344,9 +358,6 @@ class DiscreteEventSimulator(object):
             :num_cpus - number of slots to let procs run
         """
         self.CONTEXT_SWITCH = kwargs['ctx_switch']
-        self.QUANTUM = kwargs['quantum']
-        if self.QUANTUM == 0:
-            self.QUANTUM = None
         self.STOPTIME = kwargs['stop_time']
         self.EVENT_QUEUE = [] # Priority queue
         self.READY_QUEUE = [] # FIFO queue
@@ -355,6 +366,18 @@ class DiscreteEventSimulator(object):
         self.factory = ProcessFactory(procgen=kwargs['procgen'],
                                       rng=kwargs['rng'],
                                       enable_io=kwargs['enable_io']) 
+
+        qtype = kwargs['quantum'][0]
+        quantum_val = kwargs['quantum'][1]
+        if qtype == 'c':
+            self.QUANTUM = lambda: quantum_val 
+        if qtype == 'u':
+            self.QUANTUM = lambda: self.factory.rng.urand(1, 2*quantum_val) 
+        if qtype == 'e':
+            self.QUANTUM = lambda: self.factory.rng.exprand(quantum_val)
+
+        if self.QUANTUM() == 0:
+            self.QUANTUM = lambda: None
 
         #self.factory = process_factory instantiate process factory
         self.enable_io = kwargs['enable_io']
@@ -402,7 +425,6 @@ class DiscreteEventSimulator(object):
         # update the current time
         event = self.dequeue_event()
         self.record_status()
-        # print("Running:",", ".join(str(p) for p in self.CPUs if isinstance(p, Process)))
         self.T_last = self.T
         self.T = event.t
 
@@ -451,14 +473,22 @@ class DiscreteEventSimulator(object):
         if self.idle_cpu is not None: #and self.idle_cpu is not None:
             # once this process is dispatched, i.e this event is processed, we can expect
             # to incur the penalty from context switching.
-            dispatched = Event(etype=Event.PROCESS_DISPATCHED, t=self.T, proc=process)
+            # perform context_switch
+            if not self.READY_QUEUE:
+                self.T += self.CONTEXT_SWITCH
+                process.cpu = self.CPUs[self.locate_cpu(self.idle_cpu)]
+                self.CPUs[self.locate_cpu(process.cpu.id)](process, ctx=self.CONTEXT_SWITCH) # assign proc to a CPU
+                dispatched = Event(etype=Event.PROCESS_DISPATCHED, t=self.T, proc=process)
+            else:
+                dispatched = Event(etype=Event.PROCESS_DISPATCHED, t=self.T, proc=self.dequeue_process())
+                self.enqueue_process(process)
             self.enqueue_event(dispatched)
 
         else: # tripped because there is no idle cpu (self.idle_cpu = None)
             # enqueue the process into the ready queue, no event is recorded
             self.enqueue_process(process)
         # generate a new PROCESS_SUBMITTED event in the event queue
-        next_proc = self.factory(process.type, self.T) 
+        next_proc = self.factory(process.type, self.T, quantum=self.QUANTUM()) 
         e = Event(etype=Event.PROCESS_SUBMITTED, t=next_proc.arrival_time,proc=next_proc)
         self.enqueue_event(e)
 
@@ -482,36 +512,29 @@ class DiscreteEventSimulator(object):
             :Event with type PROCESS_DISPATCHED
         """
         process = event.p
-        #if self.idle_cpu is not None:
-        if self.idle_cpu is not None:
-            # perform context_switch
-            process.cpu = self.idle_cpu
-            self.T += self.CONTEXT_SWITCH
-            self.CPUs[self.idle_cpu](process, ctx=self.CONTEXT_SWITCH) # assign proc to a CPU
-            # want to either keep the current time cpu burst time or 
-            # not overshoot the demand
-            process.cpu_current = min(process.cpu_current, process.demand)
-            # builtin short circuiting should trip if self.QUANTUM == None before evaluating second half
-            if self.QUANTUM is not None and process.cpu_current > self.QUANTUM:
-                # TIME_SLICE_EXPIRED @ self.T + self.QUANTUM
-                e = Event(etype=Event.TIME_SLICE_EXPIRED, t=self.T + self.QUANTUM, proc=process)
+        # want to either keep the current time cpu burst time or 
+        # not overshoot the demand
+        process.cpu_current = min(process.cpu_current, process.demand)
+        # builtin short circuiting should trip if QUANTUM == None before evaluating second half
+        if process.QUANTUM is not None and process.cpu_current > process.QUANTUM:
+            # TIME_SLICE_EXPIRED @ self.T + self.QUANTUM
+            e = Event(etype=Event.TIME_SLICE_EXPIRED, t=self.T + process.QUANTUM, proc=process)
+            self.enqueue_event(e)
+        elif process.QUANTUM is None or process.cpu_current <= process.QUANTUM:
+            # in this case we can either enqueue an I/O request or terminate
+            # terminate the process 
+            if process.cpu_current == process.demand or process.demand == 0: 
+                e = Event(etype=Event.PROCESS_TERMINATED, t=self.T + process.cpu_current, proc=process)
                 self.enqueue_event(e)
-            elif self.QUANTUM is None or process.cpu_current <= self.QUANTUM:
-                # in this case we can either enqueue an I/O request or terminate
-
-                # terminate the process 
-                if process.cpu_current == process.demand or process.demand == 0: 
-                    e = Event(etype=Event.PROCESS_TERMINATED, t=self.T + process.cpu_current, proc=process)
-                    self.enqueue_event(e)
-                # in this case we either want to enqueue an I/O request if permissible OR
-                elif self.enable_io:
-                    e = Event(etype=Event.IO_REQUEST, t=self.T + process.cpu_current, proc=process)
-                    self.enqueue_event(e)
-        else:
-            # enqueue the process into the ready queue, no event is recorded
-            # this happens when there was an attempt to dispatch to a nonempty CPU
-            #print('[+] dispatched to an occupied CPU: {}'.format(self.CPUs))
-            self.enqueue_process(process)
+            # in this case we either want to enqueue an I/O request if permissible OR
+            elif self.enable_io:
+                e = Event(etype=Event.IO_REQUEST, t=self.T + process.cpu_current, proc=process)
+                self.enqueue_event(e)
+        #else:
+        # enqueue the process into the ready queue, no event is recorded
+        # this happens when there was an attempt to dispatch to a nonempty CPU
+        #print('[+] dispatched to an occupied CPU: {}'.format(self.CPUs))
+        #    self.enqueue_process(process)
 
     def handle_process_terminated(self, event):
         """
@@ -525,7 +548,7 @@ class DiscreteEventSimulator(object):
         process = event.p
         process.demand = 0        
         process.cpu_current = 0
-        ~self.CPUs[process.cpu]
+        ~self.CPUs[self.locate_cpu(process.cpu.id)]
         process.cpu = None
         # record the process post mortem stats for this process type
         self.process_stats[process.type]['completed'] += 1
@@ -534,11 +557,15 @@ class DiscreteEventSimulator(object):
         self.process_stats[process.type]['wait_time'].append(process.wait_time)
         self.process_stats[process.type]['num_preemptions'].append(process.num_preemptions)
         self.processes_completed += 1
-        del process
+        #del process
         if self.READY_QUEUE:
-            next_proc = self.dequeue_process()
-            e = Event(etype=Event.PROCESS_DISPATCHED,t=self.T + 1, proc=next_proc)
+            self.T += self.CONTEXT_SWITCH
+            e = Event(etype=Event.PROCESS_DISPATCHED,t=self.T, proc=self.dequeue_process())
+            e.p.cpu = self.CPUs[self.locate_cpu(self.idle_cpu)]
+            self.CPUs[self.locate_cpu(e.p.cpu.id)](process, ctx=self.CONTEXT_SWITCH) # assign proc to a CPU
             self.enqueue_event(e)
+        else:
+            print('cant dispatch',self.READY_QUEUE, self.idle_cpu)
    
     def handle_timeslice_expired(self, event):
         """
@@ -553,15 +580,20 @@ class DiscreteEventSimulator(object):
         """
         process = event.p
         # pop process off of CPUs, to be replaced with new proc
-        ~self.CPUs[process.cpu]
+        ~self.CPUs[self.locate_cpu(process.cpu.id)]
         process.cpu = None
         process.num_preemptions += 1
-        process.demand -= self.QUANTUM 
-        process.cpu_current -= self.QUANTUM
-        self.enqueue_process(process)
-
-        next_proc = self.dequeue_process()
-        e = Event(etype=Event.PROCESS_DISPATCHED,t=self.T, proc=next_proc)
+        process.demand -= process.QUANTUM 
+        process.cpu_current -= process.QUANTUM
+        self.T += self.CONTEXT_SWITCH
+        if self.READY_QUEUE:
+            e = Event(etype=Event.PROCESS_DISPATCHED,t=self.T, proc=self.dequeue_process())
+            self.enqueue_process(process)
+        else:
+            e = Event(etype=Event.PROCESS_DISPATCHED,t=self.T,proc=process)
+            
+        e.p.cpu = self.CPUs[self.locate_cpu(self.idle_cpu)]
+        self.CPUs[self.locate_cpu(e.p.cpu.id)](process, ctx=self.CONTEXT_SWITCH) # assign proc to a CPU
         self.enqueue_event(e)
 
     def handle_io_request(self, event):
@@ -575,15 +607,18 @@ class DiscreteEventSimulator(object):
         """
         process = event.p
         process.demand -= process.cpu_current
-        ~self.CPUs[process.cpu]
+        ~self.CPUs[self.locate_cpu(process.cpu.id)] # open up a resource
         process.cpu = None
         # reset time remaining to next io burst
         io_complete = Event(etype=Event.IO_COMPLETE, t=self.T + process.burst_io, proc=process)
         self.enqueue_event(io_complete)
         
+        # if there is a process to take up the an open resource then schedule a dispatch
         if self.READY_QUEUE:
-            next_proc = self.dequeue_process()
-            dispatch = Event(etype=Event.PROCESS_DISPATCHED,t=self.T, proc=next_proc)
+            self.T += self.CONTEXT_SWITCH
+            dispatch = Event(etype=Event.PROCESS_DISPATCHED,t=self.T, proc=self.dequeue_process())
+            dispatch.p.cpu = self.CPUs[self.locate_cpu(self.idle_cpu)]
+            self.CPUs[self.locate_cpu(dispatch.p.cpu.id)](dispatch, ctx=self.CONTEXT_SWITCH) # assign proc to a CPU
             self.enqueue_event(dispatch)
 
     def handle_io_complete(self, event):
@@ -596,10 +631,20 @@ class DiscreteEventSimulator(object):
         """
         process = event.p
         process.cpu_current = process.burst_cpu
-        if not self.READY_QUEUE:
-            e = Event(Event.PROCESS_DISPATCHED, t=self.T,proc=process)
+        # if there is an open resource
+        if self.idle_cpu is not None:
+            # if there is no ready procs, enqueue the one that just finished io
+            self.T += self.CONTEXT_SWITCH
+            if not self.READY_QUEUE:
+                e = Event(Event.PROCESS_DISPATCHED, t=self.T,proc=process)
+            else: # enqueue the dispatch of the next proc in the ready queue otherwise
+                e = Event(Event.PROCESS_DISPATCHED, t=self.T,proc=self.dequeue_process())
+                self.enqueue_process(process)
+            # enequeue the event 
+            e.p.cpu = self.CPUs[self.locate_cpu(self.idle_cpu)]
+            self.CPUs[self.locate_cpu(e.p.cpu.id)](e, ctx=self.CONTEXT_SWITCH) # assign proc to a CPU
             self.enqueue_event(e)
-        else:
+        else: # otherwise mark the proc. ready
             self.enqueue_process(process)
 
     def initialize(self):
@@ -620,7 +665,7 @@ class DiscreteEventSimulator(object):
         # submit seed processes to the event queue
         if not self.initialized:
             for i, ptype in enumerate(self.factory):
-                proc_instance = self.factory(ptype, 0)
+                proc_instance = self.factory(ptype, 0, quantum=self.QUANTUM())
                 proc_instance.arrival_time = i  # set the submission time for seed procs
                 # submit this seed proc to 
                 e = Event(etype=Event.PROCESS_SUBMITTED, t=i, proc=proc_instance)
@@ -635,9 +680,15 @@ class DiscreteEventSimulator(object):
         """
         get an idle CPU; return None if none exist
         """
+        self.CPUs = sorted(self.CPUs, key=lambda cpu:cpu.idle_time, reverse=True)
         if any(cpu.is_idle for cpu in self.CPUs):
-            return [i for i, cpu in enumerate(self.CPUs) if cpu.is_idle][0]
+            return [cpu.id for cpu in self.CPUs if cpu.is_idle][0]
         return None
+
+    def locate_cpu(self, idx):
+        for i, cpu in enumerate(self.CPUs):
+            if cpu.id == idx:
+                return i
     
     def enqueue_event(self, e):
         """
@@ -645,14 +696,14 @@ class DiscreteEventSimulator(object):
         args:
             :e (Event) - event with priority e.t 
         """
-        heapq.heappush(self.EVENT_QUEUE,e)
+        heapq.heappush(self.EVENT_QUEUE,(e.t, e))
 
     def dequeue_event(self):
         """
         pop the top of the EventQueue, maintaining
         the heap invariant
         """
-        return heapq.heappop(self.EVENT_QUEUE)
+        return heapq.heappop(self.EVENT_QUEUE)[1]
 
     def enqueue_process(self, p):
         self.READY_QUEUE.append(p)
@@ -709,21 +760,30 @@ class DiscreteEventSimulator(object):
                                                                                            'Avg. wait time') + delim
         proc_strs = []
         for ptype in self.factory.process_types:
-            fmt = f"{ptype:<11s} | {self.process_stats[ptype]['completed']:>10d} | " 
+            fmt = f"{ptype:<11s} | {self.process_stats[ptype]['completed']:>11d} | " 
+            mx_turnaround    = self.process_stats[ptype]['longest_turnaround']
+            avg_turnaround   = self.process_stats[ptype]['average_turnaround']
+            final_turnaround = self.process_stats[ptype]['final_turnaround'] 
+            mean_wait_time   = sum(self.process_stats[ptype]['wait_time'])/len(self.process_stats[ptype]['wait_time'])
+
             try:
-                fmt = fmt + f"{round(self.process_stats[ptype]['average_turnaround']):>15d} | "
-                fmt = fmt + f"{self.process_stats[ptype]['longest_turnaround']:>15d} | "
-                fmt = fmt + f"{self.process_stats[ptype]['final_turnaround']:>15d} | "
-                fmt = fmt + f"{round(sum(self.process_stats[ptype]['wait_time'])/len(self.process_stats[ptype]['wait_time'])):>15d}"
+                fmt = fmt + "{:>15s} | ".format(f"{round(avg_turnaround)} ({quick_ratio(avg_turnaround, self.T)}%)")
+                fmt = fmt + "{:>15s} | ".format(f"{final_turnaround} ({quick_ratio(final_turnaround, self.T)}%)")
+                fmt = fmt + "{:>15s} | ".format(f"{mx_turnaround} ({quick_ratio(mx_turnaround, self.T)}%)")
+                fmt = fmt + "{:>15s}".format(f"{round(mean_wait_time)} ({quick_ratio(mean_wait_time, self.T)}%)")
             except KeyError:
                 fmt = fmt + "no turnaround data" 
             proc_strs.append(fmt)
         summary += "\n".join(proc_strs) + delim
         summary += 'CPU statistics' + nl
-        summary += '{0:<4s} - {1:<10s} - {2:<10s}'.format('ID','active time','idle time') + nl
+        summary += '{0:<4s} - {1:^15s} - {2:^15s} - {3:<15s}'.format('ID','active time','idle time', 'context switch time') + nl
         cpu_strs = []
         for cpu in self.CPUs:
-            cpu_strs.append(f"{cpu.id:>4d} | {cpu.active_time:>8d} | {cpu.idle_time:>8d}")
+            total = cpu.active_time + cpu.context_switch_time + cpu.idle_time 
+            cpu_strs.append(f"{cpu.id:>4d} | " +
+                            "{:>15s} | ".format(f"{cpu.active_time} ({quick_ratio(cpu.active_time,total)}%)") +
+                            "{:>15s} | ".format(f"{cpu.idle_time} ({quick_ratio(cpu.idle_time,total)}%)") + 
+                            "{:>15s}".format(f"{cpu.context_switch_time} ({quick_ratio(cpu.context_switch_time, total)})%"))
         summary += "\n".join(cpu_strs)
         return summary
 
@@ -744,3 +804,6 @@ class DiscreteEventSimulator(object):
     
     def __len__(self):
         return len(self.EVENT_QUEUE)
+
+def quick_ratio(a,b):
+    return f"{round((a/b)*100,2)}"

@@ -24,6 +24,26 @@ def exists(x):
         return x
     raise FileNotFoundError
 
+def validquantum(x):
+    """
+    verify the parameter is a valid quantum
+    """
+    UNIFORM = -1
+    EXPONENTIAL = -2
+    x = int(x)
+    if x < 0:
+        qtype = int(str(x)[:2])
+        value = natural_num_gt0(int(str(x)[2:]))
+        if qtype == UNIFORM:
+            return ('u',value)
+        if qtype == EXPONENTIAL:
+            return ('e',value)
+        else:
+            raise ValueError
+    else:
+        x = natural_num_inc0(x)
+        return ('c',x)
+
 def parse_args():
     D = 'Discrete Event Simulation: model processes propagating through a scheduling system'
     parser = argparse.ArgumentParser(description=D)
@@ -44,8 +64,12 @@ def parse_args():
     parser.add_argument('--quantum','-q',
                         dest='quantum',
                         default=0,
-                        help='Quantum for pre-emptive scheduling',
-                        type=int)
+                        help='Quantum for pre-emptive scheduling;'+
+                             'specify int > 0 for constant quantum, '+
+                             '0 for no quantum, '+
+                             '-1u, u an integer for quantums drawn from U(1,u), '+
+                             '-2e, e an integer for quantums drawn from exponential dist. with mean e',
+                        type=validquantum)
 
     parser.add_argument('--stop-time','-t',
                         dest='stop_time',
