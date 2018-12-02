@@ -2,6 +2,9 @@
 main
 a.out
 *.o
+constant_q/
+uniform_q/
+exponential_q/
 out/
 *.aux
 *.log

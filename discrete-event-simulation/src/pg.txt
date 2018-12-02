@@ -1,4 +1,9 @@
-2
-interactive 20 10 80 5
-batch 500 250 1000 10
+3
+#   avg.----|  *---avg. cpu burst time
+#   cpu     |   |    *----interarrival time
+#   demand  |   |    |   *---- io burst time
+#           |   |    |   | 
+interactive 20  10   80  5
+malloc       5   2    4 30
+batch      500 250 1000 10
 
