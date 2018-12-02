@@ -8,4 +8,5 @@ exponential_q/
 out/
 *.aux
 *.log
+.ipynb_checkpoints/
 __pycache__
