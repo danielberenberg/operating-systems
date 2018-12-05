@@ -2,9 +2,15 @@ import sys
 from math import log, floor
 import heapq
 import time
+from reinforcement import AdaptivePreemptor
 
 def mean(x):
+    if len(x) == 0:
+        return 0
     return sum(x)/len(x)
+
+def quick_ratio(a,b):
+    return round((a/b)*100,2)
 
 class RandomNumberGenerator(object):
     def __init__(self, seed=None):
@@ -77,7 +83,7 @@ class Process(object):
     __slots__ = ['type','burst_cpu','burst_io',
                  'demand','cpu_current','arrival_time',
                  'wait_time','num_preemptions','pid',
-                 'cpu','QUANTUM']
+                 'cpu','QUANTUM','last_quantum']
 
     def __init__(self, **proc_attrs):
         """
@@ -113,6 +119,7 @@ class Process(object):
             if not hasattr(self, attr):
                 setattr(self, attr, 0)
         self.cpu = None
+        self.last_quantum = 0
 
     def __eq__(self, proc):
         if isinstance(proc, Process):
@@ -125,6 +132,11 @@ class Process(object):
             s += f'|io_burst={self.burst_io}'
         s += ')'
         return s
+
+    def __getitem__(self, it):
+        if hasattr(self, it):
+            return getattr(self, it)
+        return None
 
 class Event(object):
     PROCESS_SUBMITTED  = 'PROCESS_SUBMITTED'
@@ -192,10 +204,13 @@ class CPU(object):
         self.active_time =  0
         self.context_switch_time = 0
         self.T = 0
+        self._idle_times = dict()
+        self._active_times = dict()
         self._slot = None
 
     def activate(self, T):
         self.active_time += T
+        self._active_times[T] = self.active_time
 
     @property
     def state(self):
@@ -210,7 +225,12 @@ class CPU(object):
         return self.state == CPU.BUSY
 
     def idle_time(self, T):
-        return T - self.active_time - self.context_switch_time 
+        idle_time = T - self.active_time - self.context_switch_time
+        if T not in self._idle_times:
+            self._idle_times[T] = idle_time 
+        elif T in self._idle_times and self._idle_times[T] < idle_time:
+            self.idle_times[T] = idle_time
+        return self._idle_times[T]
 
     @property
     def is_idle(self):
@@ -231,6 +251,26 @@ class CPU(object):
 
     def __repr__(self):
         return str(self)
+
+    def to_dict(self):
+        """
+        return a dictionary version of this cpu
+        in order to prepare it to be saved to json string
+        """
+        representation = dict()
+        representation['cpu_id'] = self.id
+        representation['totals'] = {'active_time':self.active_time, 
+                                    'idle_time': self._idle_times[max(self._idle_times.keys())],
+                                    'context_switch_time':self.context_switch_time}
+        
+        get_t = lambda d:sorted(list(d.keys()))
+        representation['active_time_per_t'] = {'t':get_t(self._active_times),
+                                               'active_time':[self._active_times[t] for t in get_t(self._active_times)]}
+
+        representation['idle_time_per_t'] = {'t':get_t(self._idle_times), 
+                                             'idle_time':[self._idle_times[t] for t in get_t(self._idle_times)]}
+
+        return representation
 
 class ProcessFactory(object):
     def __init__(self,procgen='pg.txt',rng=RandomNumberGenerator(),enable_io=True):
@@ -279,7 +319,7 @@ class ProcessFactory(object):
                   file=sys.stderr)
             sys.exit()
 
-    def _observe(self, process_type, last_time, QUANTUM=1):
+    def _observe(self, process_type, last_time):
         """
         Spins a new process.
         CPU service time, I/O burst time, interarrival time are drawn from exponentials
@@ -306,8 +346,7 @@ class ProcessFactory(object):
                                 # length of time this proc will have burst cpu
                                 'burst_cpu':self.rng.urand(1, 2 * self.procmap[process_type]['burst_cpu']),
                                 # pid
-                                'pid':self.new_pid,
-                                'QUANTUM':QUANTUM} 
+                                'pid':self.new_pid}
 
         if self.enable_io:
             # length of the io burst for this proc
@@ -333,8 +372,8 @@ class ProcessFactory(object):
             self._i = 0
             raise StopIteration
             
-    def __call__(self, process_type, last_time, quantum=1):
-        return self._observe(process_type, last_time, QUANTUM=quantum)
+    def __call__(self, process_type, last_time):
+        return self._observe(process_type, last_time)
         
     def __str__(self):
         return 'Process Factory ({} proc. types)'.format(len(self.procmap))
@@ -379,10 +418,15 @@ class DiscreteEventSimulator(object):
 
         self.qtype = kwargs['quantum'][0]
         self.quantum_val = kwargs['quantum'][1]
-
+        self.RL = False
         #self.factory = process_factory instantiate process factory
         self.enable_io = kwargs['enable_io']
         self.cpu_count = kwargs['num_cpus']
+
+        if self.qtype == 'r':
+            self.RL = True
+            self.agent = AdaptivePreemptor(cpu_ct=self.cpu_count, enable_io=self.enable_io)
+
         self.T = 0
         self.T_last = self.T
         
@@ -391,29 +435,36 @@ class DiscreteEventSimulator(object):
         self.event_queue_len = []
         self.events_processed = 0
         self.processes_completed = 0
-        self.timesteps = []
         # the postmortem stats for each of the processes available from the factory
-        self.process_stats = {ptype:{'completed':0,
-                                     'throughput':dict(), # moving average of number of processes completed per t
-                                     'turnaround_times':[],
-                                     'wait_time':[],
-                                     'num_preemptions':[],
-                                     'quantums':[]} for ptype in self.factory.process_types}
+        self.time_parameterized_process_stats = {ptype:{'completed':dict(),
+                                                        'turnaround':dict(),
+                                                        'wait_time':dict(),
+                                                        'preemptions':dict()} for ptype in self.factory.process_types}
+        self.time_parameterized_process_stats = dict()
 
         # initialize the slots where processes can run 
         self.CPUs = [CPU(i) for i in range(self.cpu_count)] 
+        self.last_event = None
 
-    def QUANTUM(self):
-        if self.qtype == 'c':
-            if self.quantum_val == 0:
-                return None
-            else:
-                return self.quantum_val
-        if self.qtype == 'u':
-            return max(1, self.factory.rng.urand(1, 2*self.quantum_val))
+    def record_process_stats(self, terminal_event):
+        self.processes_completed += 1
+        ptype = terminal_event.p.type
+        t = terminal_event.t
+    
+        if t not in self.time_parameterized_process_stats:
+            self.time_parameterized_process_stats[t] = self.proc_statkeeper(*self.factory.process_types)
 
-        if self.qtype == 'e':
-            return max(1,self.factory.rng.exprand(self.quantum_val))
+        self.time_parameterized_process_stats[t][ptype]['completed'] += 1
+        self.time_parameterized_process_stats[t][ptype]['turnaround'].append(t - terminal_event.p.arrival_time)
+        self.time_parameterized_process_stats[t][ptype]['wait_time'].append(terminal_event.p.wait_time)
+        self.time_parameterized_process_stats[t][ptype]['preemptions'].append(terminal_event.p.num_preemptions)
+
+    def proc_statkeeper(self,*process_types):
+        """
+        returns a dictionary of dictionaries for process statistics
+        """
+        return {pt:dict(map(lambda k:(k,{True:0, False:[]}[k == 'completed']), ['wait_time', 'completed', 'preemptions','turnaround'])) for pt in process_types} 
+
 
     @property
     def initialized(self):
@@ -438,12 +489,17 @@ class DiscreteEventSimulator(object):
         """
         # update the current time
         event = self.dequeue_event()
+        if self.last_event is not None and self.RL:
+            self.update_policy(event)
         self.record_status()
         self.T_last = self.T
         self.T = event.t
         # update the wait times of processes in the ready queue if there are any
         for proc in self.READY_QUEUE:
             proc.wait_time += self.T - self.T_last
+
+        if self.RL:
+            self.agent.setTime(self.T)
 
         if event.type == Event.PROCESS_SUBMITTED:
             self.handle_process_submitted(event)
@@ -457,6 +513,11 @@ class DiscreteEventSimulator(object):
             self.handle_io_request(event)
         elif event.type == Event.IO_COMPLETE:
             self.handle_io_complete(event)
+
+        for cpu in self.CPUs:
+            # record idle times
+            _ = cpu.idle_time(self.T)
+        self.last_event = event
         return event
 
     def handle_process_submitted(self, event):
@@ -488,14 +549,18 @@ class DiscreteEventSimulator(object):
                 self.enqueue_process(process)
 
             dispatched.p.cpu = self.CPUs[self.locate_cpu(self.idle_cpu)]
+            if self.RL:
+                self.assign_quantum(dispatched)
             self.enqueue_event(dispatched)
 
         else: # tripped because there is no idle cpu (self.idle_cpu = None)
             # enqueue the process into the ready queue, no event is recorded
             self.enqueue_process(process)
+
         # generate a new PROCESS_SUBMITTED event in the event queue
-        next_proc = self.factory(process.type, self.T, quantum=self.QUANTUM()) 
+        next_proc = self.factory(process.type, self.T) 
         e = Event(etype=Event.PROCESS_SUBMITTED, t=next_proc.arrival_time,proc=next_proc)
+        self.assign_quantum(e)
         self.enqueue_event(e)
 
     def handle_process_dispatched(self, event):
@@ -544,6 +609,7 @@ class DiscreteEventSimulator(object):
             process.cpu = None
             self.enqueue_process(process)
 
+
     def handle_process_terminated(self, event):
         """
         handle PROCESS_TERMINATED
@@ -561,20 +627,12 @@ class DiscreteEventSimulator(object):
         ~self.CPUs[self.locate_cpu(process.cpu.id)]
         process.cpu = None
         # record the process post mortem stats for this process type
-        self.process_stats[process.type]['completed'] += 1
-        try:
-            self.process_stats[process.type]['throughput'][self.T] += self.process_stats[process.type]['completed']
-        except KeyError:
-            self.process_stats[process.type]['throughput'][self.T] = self.process_stats[process.type]['completed']
-        
-        self.process_stats[process.type]['turnaround_times'].append(self.T - process.arrival_time) 
-        self.process_stats[process.type]['wait_time'].append(process.wait_time)
-        self.process_stats[process.type]['num_preemptions'].append(process.num_preemptions)
-        self.process_stats[process.type]['quantums'].append(process.QUANTUM)
-        self.processes_completed += 1
+        self.record_process_stats(event)
         if self.READY_QUEUE:
             e = Event(etype=Event.PROCESS_DISPATCHED,t=self.T, proc=self.dequeue_process())
             e.p.cpu = self.CPUs[self.locate_cpu(self.idle_cpu)]
+            if self.RL:
+                self.assign_quantum(e)
             self.enqueue_event(e)
    
     def handle_timeslice_expired(self, event):
@@ -604,6 +662,8 @@ class DiscreteEventSimulator(object):
             e = Event(etype=Event.PROCESS_DISPATCHED,t=self.T,proc=process) 
 
         e.p.cpu = self.CPUs[self.locate_cpu(self.idle_cpu)]
+        if self.RL:
+            self.assign_quantum(e)
         self.enqueue_event(e)
 
     def handle_io_request(self, event):
@@ -629,6 +689,8 @@ class DiscreteEventSimulator(object):
         if self.READY_QUEUE:
             dispatch = Event(etype=Event.PROCESS_DISPATCHED,t=self.T, proc=self.dequeue_process())
             dispatch.p.cpu = self.CPUs[self.locate_cpu(self.idle_cpu)]
+            if self.RL:
+                self.assign_quantum(dispatch)
             self.enqueue_event(dispatch)
 
     def handle_io_complete(self, event):
@@ -651,6 +713,8 @@ class DiscreteEventSimulator(object):
                 self.enqueue_process(process)
             # enequeue the event 
             e.p.cpu = self.CPUs[self.locate_cpu(self.idle_cpu)]
+            if self.RL:
+                self.assign_quantum(e)
             self.enqueue_event(e)
         else: # otherwise mark the proc. ready
             self.enqueue_process(process)
@@ -673,10 +737,11 @@ class DiscreteEventSimulator(object):
         # submit seed processes to the event queue
         if not self.initialized:
             for i, ptype in enumerate(self.factory):
-                proc_instance = self.factory(ptype, 0, quantum=self.QUANTUM())
+                proc_instance = self.factory(ptype, 0)
                 proc_instance.arrival_time = i  # set the submission time for seed procs
                 # submit this seed proc to 
                 e = Event(etype=Event.PROCESS_SUBMITTED, t=i, proc=proc_instance)
+                self.assign_quantum(e)
                 self.enqueue_event(e)
 
             self._initialized = True
@@ -688,7 +753,7 @@ class DiscreteEventSimulator(object):
         """
         get an idle CPU; return None if none exist
         """
-        self.CPUs = sorted(self.CPUs, key=lambda cpu:cpu.idle_time(self.T), reverse=True)
+        #self.CPUs = sorted(self.CPUs, key=lambda cpu:cpu.idle_time(self.T), reverse=True)
         if any(cpu.is_idle for cpu in self.CPUs):
             return [cpu.id for cpu in self.CPUs if cpu.is_idle][0]
         return None
@@ -726,82 +791,214 @@ class DiscreteEventSimulator(object):
         """
         self.event_queue_len.append(len(self))
         self.ready_queue_len.append(len(self.READY_QUEUE))
-        self.timesteps.append(self.T)
         self.events_processed += 1
 
-    def finalize(self):
+    def to_dict(self):
         """
-        compute system/process based post mortem run statistics
+        get a json style summary of the entire DES including the following statistics:
+        - simulation length                             self.T
+        - total processes completed                     self.processes_completed
+        - total events processed                        self.events_processed
+        - cpu data
+            - number of cpus                            self.cpu_count                        
+            - CPU data reported in dict(CPU)            self.CPUs
+
+        - ready queue data                              self.ready_queue_len
+            - average ready queue length                
+            - maximum ready queue length                
+            - final ready queue length                  
+            - event parameterized ready queue length    
+
+        - event queue data                              self.event_queue_len
+            - average event queue length     
+            - maximum event queue length
+            - final event queue length
+            - event parameterized event queue length
+
+        - time parameterized stats                      self.time_parameterized_process_stats
+                - time parameterized turnarounds per process
+                - time parameterized wait time per process
+                - time parameterized # preemptions per process
+        
+        - turnaround data                               self.time_parameterized_process_stats
+            - average turnaround per process
+            - max turnaround per process
+            - final turnaround per process
+        - wait time
+            - average wait time per process
+            - final wait time
+            - max wait time
+        
+        - preemptions
+            - average # preemptions per process
+            - final number of preemptions
+            - max # preemptions
         """
-        self.SIMULATION_LEN = self.T
-        self.avg_eq_len = mean(self.event_queue_len)
-        self.avg_rq_len = mean(self.ready_queue_len)
-        self.final_eq_len = self.event_queue_len[-1]
-        self.final_rq_len = self.ready_queue_len[-1]
-        for ptype in self.factory.process_types:
-            if self.process_stats[ptype]['turnaround_times']:
-                turnarounds = self.process_stats[ptype]['turnaround_times']
-                self.process_stats[ptype]['final_turnaround'] = turnarounds[-1]
-                self.process_stats[ptype]['longest_turnaround'] = max(turnarounds)
-                self.process_stats[ptype]['average_turnaround'] = mean(turnarounds)
-                self.process_stats[ptype]['average_wait_time'] = mean(self.process_stats[ptype]['wait_time'])
-                self.process_stats[ptype]['average_num_preemptions'] = mean(self.process_stats[ptype]['num_preemptions'])
+        summary = {'totals': {'simulation_length':self.T, 
+                              'events_processed':self.events_processed, 
+                              'processes_completed':self.processes_completed},
+                   'cpus': {f"cpu_{cpu.id}":cpu.to_dict() for cpu in self.CPUs},
+                   'ready_queue':{'avg_length':round(mean(self.ready_queue_len)),
+                                  'max_length':max(self.ready_queue_len),
+                                  'final_length':self.ready_queue_len[-1],
+                                  'queue':self.ready_queue_len},
+                   'event_queue':{'avg_length':round(mean(self.event_queue_len)),
+                                  'max_length':max(self.event_queue_len),
+                                  'final_length':self.event_queue_len[-1],
+                                  'queue':self.event_queue_len},
+                   'time_parameterized':self.time_parameterized_process_stats}
+        
+        summary['T'] = sorted(list(summary['time_parameterized'].keys()))
+        ptypes = self.factory.process_types
+        process_stats = {ptype:{'completed':0, 'turnaround':[], 'wait_time':[], 'preemptions':[]} for ptype in ptypes}
+        for t, proc_stats in self.time_parameterized_process_stats.items():
+            for ptype in ptypes:
+                for k in process_stats[ptype]:
+                    if k != 'completed':
+                        process_stats[ptype][k].extend(proc_stats[ptype][k])
+                    else:
+                        process_stats[ptype][k] += proc_stats[ptype][k]
+
+        process_summary_stats = {ptype:dict() for ptype in ptypes}
+        for ptype in process_stats:
+            for stat in process_stats[ptype]:
+                if stat == 'completed':
+                    process_summary_stats[ptype][stat] = process_stats[ptype][stat]
+                else:
+                    process_summary_stats[ptype][stat] = {'avg':mean(process_stats[ptype][stat]),
+                                                          'max':max(process_stats[ptype][stat]),
+                                                          'final':process_stats[ptype][stat][-1]}
+                     
+        summary['process_summary'] = process_summary_stats
+        return summary
 
     def summarize(self):
-        self.finalize()
+        self_dict = self.to_dict()
         ptypes = self.factory.process_types
         delim = '\n' + 80 * '-' + '\n'
         nl = '\n'
         summary = ""
         summary+= '=====- SIMULATION SUMMARY -=====' + nl
-        summary+= f'Simulation Length: {self.SIMULATION_LEN}' + nl
-        summary+= f'Total processes completed: {self.processes_completed}' + nl
-        summary+= f'Total events processed: {self.events_processed}' + delim
+        summary+= f"Simulation Length: {self_dict['totals']['simulation_length']}" + nl
+        summary+= f"Total processes completed: {self_dict['totals']['processes_completed']}" + nl
+        summary+= f"Total events processed: {self_dict['totals']['events_processed']}" + delim
         summary+= 'Ready Queue Statistics' + nl
-        summary+= f' > average length: {round(self.avg_rq_len)}' + nl
-        summary+= f' > final length  : {round(self.final_rq_len)}' + delim
+        summary+= f" > average length: {self_dict['ready_queue']['avg_length']}" + nl
+        summary+= f" > final length  : {self_dict['ready_queue']['final_length']}" + delim
         summary+= 'Event Queue Statistics' + nl
-        summary+= f' > average length: {round(self.avg_eq_len)}' + nl
-        summary+= f' > final length  : {round(self.final_eq_len)}' + delim
+        summary+= f" > average length: {self_dict['event_queue']['avg_length']}" + nl
+        summary+= f" > final length  : {self_dict['event_queue']['final_length']}" + delim
         summary+= 'Process Statistics' + nl
         summary+= " "*20 + " | " + " | ".join(f"{ptype:<20s}" for ptype in ptypes) + nl
-        stats = [('Avg. turnaround', 'average_turnaround'),
-                 ('Max. turnaround', 'longest_turnaround'),
-                 ('End turnaround','final_turnaround'),
-                 ('Avg. wait time','average_wait_time')]
-        summary += "{:>20s} | ".format("# Completed") + " | ".join(f"{self.process_stats[ptype]['completed']:>20d}" for ptype in ptypes) + " |" + nl 
-        preemp = []
-        for ptype in ptypes:
-            try:
-                preemp.append(self.process_stats[ptype]['average_num_preemptions'])
-            except KeyError:
-                preemp.append(0)
+        summary += "{:>20s} | ".format("# Completed") + " | ".join(f"{self_dict['process_summary'][ptype]['completed']:>20d}" for ptype in ptypes) + " |" + nl 
+
+        preemp           = [self_dict['process_summary'][ptype]['preemptions']['avg'] for ptype in ptypes]
+        turnaround_avg   = [self_dict['process_summary'][ptype]['turnaround']['avg'] for ptype in ptypes]
+        turnaround_final = [self_dict['process_summary'][ptype]['turnaround']['final'] for ptype in ptypes]
+        turnaround_max   = [self_dict['process_summary'][ptype]['turnaround']['max'] for ptype in ptypes]
+        wait_times = [self_dict['process_summary'][ptype]['wait_time']['avg'] for ptype in ptypes]
         summary += "{:>20s} | ".format("Avg. num. preemp.") +\
-                " | ".join("{:>20.2f}".format(pre) for pre in preemp) + " |"+ nl
-        for stat_name, stat_key in stats:
-            stat_class = []
-            for ptype in ptypes:
-                try:
-                    stat_class.append(round(self.process_stats[ptype][stat_key]))
-                except KeyError:
-                    stat_class.append(0)
-            summary += "{:>20s} | ".format(stat_name) +\
-                    " | ".join("{:>20s}".format("{:>6d} ({:>3.02f}%)".format(stat, 
-                                                                              quick_ratio(stat, 
-                                                                                          self.T))) for stat in stat_class) + " |" + nl 
+                " | ".join("{:>20.02f}".format(pre) for pre in preemp) + " |" + nl
+
+        summary += "{:>20s} | ".format("Avg. wait time") +\
+                " | ".join("{:>20.02f}".format(wait) for wait in wait_times) + " |" + nl 
+        
+        summary += "{:>20s} | ".format("Avg. turnaround") +\
+                " | ".join("{:>20.02f}".format(tu) for tu in turnaround_avg) + " |"+ nl
+
+        summary += "{:>20s} | ".format("Max. turnaround") +\
+                " | ".join("{:>20.02f}".format(tu) for tu in turnaround_max) + " |"+ nl
+
+        summary += "{:>20s} | ".format("End turnaround") +\
+                " | ".join("{:>20.02f}".format(tu) for tu in turnaround_final) + " |"+ nl
+
         summary += delim[1:]
         summary += 'CPU statistics' + nl
-        summary += '{0:<4s} - {1:^15s} - {2:^15s} - {3:<15s}'.format('ID','active time','idle time', 'context switch time') + nl
+        summary += '{0:<4s} - {1:^15s} - {2:^15s} - {3:^15s}'.format('ID','active time','idle time', 'context switch time') + nl
         cpu_strs = []
-        for cpu in self.CPUs:
-            cpu_strs.append(f"{cpu.id:>4d} | " +
-                            "{:>15s} | ".format(f"{cpu.active_time} ({quick_ratio(cpu.active_time,self.T)}%)") +
-                            "{:>15s} | ".format(f"{cpu.idle_time(self.T)} ({quick_ratio(cpu.idle_time(self.T),self.T)}%)") + 
-                            "{:>15s}".format(f"{cpu.context_switch_time} ({quick_ratio(cpu.context_switch_time, self.T)})%"))
+        for cpu_name in self_dict['cpus']:
+            cpu = self_dict['cpus'][cpu_name]
+            totals = cpu['totals']
+            cpu_strs.append(f"{cpu['cpu_id']:>4d} | " +
+                            "{:>15s} | ".format(f"{totals['active_time']} ({quick_ratio(totals['active_time'],self.T)}%)") +
+                            "{:>15s} | ".format(f"{totals['idle_time']} ({quick_ratio(totals['idle_time'], self.T)}%)") + 
+                            "{:>15s}".format(f"{totals['context_switch_time']} ({quick_ratio(totals['context_switch_time'], self.T)}%)"))
         summary += "\n".join(cpu_strs)
             
         return summary
     
+    def get_reward(self):
+        """
+        return the reard for the current state of the system, given by
+        the negative sum over all cpus, their time idle between the
+        last two timesteps
+           ___
+         - \      
+           /__ idletime(c, T, T_last)
+         c in cpus
+        """
+        # goodness of the system should be a function of idle time,
+        # downtime
+        #return 
+        #ncomp = sum(self.time_parameterized_process_stats[self.T_last][ptype]['completed'] for ptype in self.factory.process_types)
+        #wait_time_p = self.time_parameterized_process_stats[self.T_last]
+        try:
+            wait_times = sum(sum(self.time_parameterized_process_stats[self.T_last][ptype]['wait_time']) for ptype in self.factory.process_types)
+            ncomp      = sum(self.time_parameterized_process_stats[self.T_last][ptype]['completed'] for ptype in self.factory.process_types)
+            return -1*wait_times/ncomp
+        except KeyError:
+            return -1*sum(cpu.idle_time(self.T) - cpu.idle_time(self.T_last) for cpu in self.CPUs)
+
+    def get_state_features(self, event):
+        """
+        RL agent requires that the environment
+        return it a state with various attributes
+        args:
+            :event (Event) - the event
+        returns:
+            :(dict) - state attributes for each feature self.agent expects
+        """
+        state_features = dict()
+        for feat in self.agent.features:
+            if hasattr(self, feat):
+                state_features[feat] = getattr(self, feat)
+            elif hasattr(event.p, feat):
+                state_features[feat] = getattr(event.p, feat)
+            elif "idletime" in feat:
+                cpu_id = int(feat.split("_")[1])
+                cpu = self.CPUs[self.locate_cpu(cpu_id)]
+                idle_time_T, idle_time_T_last = cpu.idle_time(self.T), cpu.idle_time(self.T_last) 
+                state_features[feat] = idle_time_T - idle_time_T_last
+            elif feat == "time_in_system":
+                state_features[feat] = self.T - event.p.arrival_time 
+
+        return state_features
+
+    def get_quantum(self, event):
+        state_features = self.get_state_features(event)
+        return self.agent.getPolicy(state_features)
+
+
+    def update_policy(self, event):
+        if self.last_event.t > 1000:
+            last_event = self.last_event
+            last_event_features = self.get_state_features(last_event)
+            event_features = self.get_state_features(event)
+            self.agent.update(last_event_features, event.p.QUANTUM, event_features, self.get_reward())
+
+    def assign_quantum(self, event):
+        if not isinstance(event, Event):
+            raise ValueError('Expected an event')
+
+        if self.qtype == 'c':
+            if self.quantum_val == 0:
+                event.p.QUANTUM = None
+            else:
+                event.p.QUANTUM = self.quantum_val
+
+        elif self.qtype == 'r':
+            feats = self.get_state_features(event)
+            event.p.QUANTUM = self.get_quantum(event)
 
 
     def __str__(self):
@@ -822,5 +1019,3 @@ class DiscreteEventSimulator(object):
     def __len__(self):
         return len(self.EVENT_QUEUE)
 
-def quick_ratio(a,b):
-    return round((a/b)*100,2)

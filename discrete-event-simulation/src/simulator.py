@@ -1,8 +1,8 @@
 import sys, os
 import random
 import argparse
-import pickle
 from desutils import RandomNumberGenerator, DiscreteEventSimulator
+import json
 import matplotlib.pyplot as plt
 
 def natural_num_gt0(x):
@@ -30,21 +30,14 @@ def validquantum(x):
     """
     verify the parameter is a valid quantum
     """
-    UNIFORM = -1
-    EXPONENTIAL = -2
+    #UNIFORM = -1
+    #EXPONENTIAL = -2
+    REINFORCEMENT = -3
+    if int(x) == REINFORCEMENT:
+        return ('r','null')
     x = int(x)
-    if x < 0:
-        qtype = int(str(x)[:2])
-        value = natural_num_gt0(int(str(x)[2:]))
-        if qtype == UNIFORM:
-            return ('u',value)
-        if qtype == EXPONENTIAL:
-            return ('e',value)
-        else:
-            raise ValueError
-    else:
-        x = natural_num_inc0(x)
-        return ('c',x)
+    x = natural_num_inc0(x)
+    return ('c',x)
 
 def valid_dir(x):
     if x is None:
@@ -52,13 +45,8 @@ def valid_dir(x):
     if not os.path.isdir(x) and not os.path.exists(x):
         os.makedirs(x)
     else:
-        i = 0
-        while os.path.exists(x + "_%03d" % i):
-            i += 1
-        os.makedirs(x + "_%03d" % i)
-        x = x + "_%03d" % i
-    os.makedirs(os.path.join(x, 'pickles'))
-    os.makedirs(os.path.join(x, 'trials'))
+        print(f"[!!] {x} exists") 
+        raise ValueError
     return x
             
 
@@ -85,8 +73,9 @@ def parse_args():
                         help='Quantum for pre-emptive scheduling;'+
                              'specify int > 0 for constant quantum, '+
                              '0 for no quantum, '+
-                             '-1u, u an integer for quantums drawn from U(1,u), '+
-                             '-2e, e an integer for quantums drawn from exponential dist. with mean e',
+                             #'-1u, u an integer for quantums drawn from U(1,u), '+
+                             #'-2e, e an integer for quantums drawn from exponential dist. with mean e'+
+                             '-3 for RL adaptive preemption approach',
                         type=validquantum)
 
     parser.add_argument('--stop-time','-t',
@@ -195,12 +184,12 @@ def main(args,t=0):
         pprint(None)
         print()
         if args.output is not None:
-            with open(os.path.join(args.output, 
-                                   'pickles',
-                                   'DiscreteEventSimulator_Trial{:03d}.pkl'.format(t)),'wb') as pkl:
-                pickle.dump(system_clock, pkl)
-        print(system_clock)
+            with open(os.path.join(args.output, 'jsons','DiscreteEventSimulator_Trial{:03d}.json'.format(t)),'w') as pkl:
+                print(json.dumps(system_clock.to_dict()), file=pkl)
+
+
         if args.output is not None:
+            print(system_clock)
             with open(os.path.join(args.output,'trials','DES_Summary_trial{:03d}.txt'.format(t)),'w') as txt:
                 print(system_clock, file=txt)
 
@@ -220,6 +209,8 @@ def main(args,t=0):
 
 if __name__ == '__main__':
     args = parse_args().parse_args()
+    os.makedirs(os.path.join(args.output, 'jsons'))
+    os.makedirs(os.path.join(args.output, 'trials'))
     try:
         # the random number generator for the simulation
         rng = RandomNumberGenerator(seed=args.seed)
