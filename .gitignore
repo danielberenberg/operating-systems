@@ -9,4 +9,5 @@ out/
 *.aux
 *.log
 .ipynb_checkpoints/
+batchInteractive*
 __pycache__

@@ -8,15 +8,17 @@ function simulate () {
     PRFX="${INPUT:0:2}"
     echo prefix $PRFX
     FIN=$(echo $INPUT | sed -E 's/^.{2}//')
-    if [ $PRFX -eq -1 ]; then
+    if [ $PRFX -eq -3 ]; then
         PRFX=Reinforcement
+        Q=-3
+        ODIR=$PARDIR/DES_RL
     else
         printf -v Q "%04d" $INPUT
+        ODIR=$PARDIR/DESQuantum__$Q
         PRFX=Constant
     fi
     echo $Q
     echo QUANTUM $Q
-    ODIR=$PARDIR/DESQuantum__$PRFX$Q
     echo $ODIR
     CMD="python simulator.py --stop-time $STOPTIME -q $Q -o $ODIR -c $CPU -N 15 -w 1 -v 100 -m"
     echo $CMD
@@ -28,9 +30,6 @@ if [ $qtype -eq 0 ]; then
         simulate $i
     done
 else
-    for i in 1 `seq 10 5 200`; do
-        simulate $qtype$i
-    done
-
+    simulate $qtype
 fi
 
