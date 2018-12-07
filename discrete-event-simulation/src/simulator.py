@@ -2,7 +2,7 @@ import sys, os
 import random
 import argparse
 from desutils import RandomNumberGenerator, DiscreteEventSimulator
-import json
+import pickle
 import matplotlib.pyplot as plt
 
 def natural_num_gt0(x):
@@ -184,8 +184,8 @@ def main(args,t=0):
         pprint(None)
         print()
         if args.output is not None:
-            with open(os.path.join(args.output, 'jsons','DiscreteEventSimulator_Trial{:03d}.json'.format(t)),'w') as pkl:
-                print(json.dumps(system_clock.to_dict()), file=pkl)
+            with open(os.path.join(args.output, 'pickles','DiscreteEventSimulator_Trial{:03d}.bin'.format(t)),'wb') as pkl:
+                pickle.dump(system_clock, pkl)
 
 
         if args.output is not None:
@@ -209,7 +209,7 @@ def main(args,t=0):
 
 if __name__ == '__main__':
     args = parse_args().parse_args()
-    os.makedirs(os.path.join(args.output, 'jsons'))
+    os.makedirs(os.path.join(args.output, 'pickles'))
     os.makedirs(os.path.join(args.output, 'trials'))
     try:
         # the random number generator for the simulation

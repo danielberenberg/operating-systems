@@ -260,7 +260,7 @@ class CPU(object):
         representation = dict()
         representation['cpu_id'] = self.id
         representation['totals'] = {'active_time':self.active_time, 
-                                    'idle_time': self._idle_times[max(self._idle_times.keys())],
+                                    'idle_time': self._idle_times[max(self._idle_times.values())],
                                     'context_switch_time':self.context_switch_time}
         
         get_t = lambda d:sorted(list(d.keys()))
@@ -435,6 +435,11 @@ class DiscreteEventSimulator(object):
         self.event_queue_len = []
         self.events_processed = 0
         self.processes_completed = 0
+        self.process_stats = {ptype:{'completed':0,
+                                     'throughput':dict(), # moving average of number of processes completed per t
+                                     'turnaround_times':[],
+                                     'wait_time':[],'num_preemptions':[]} for ptype in self.factory.process_types}
+
         # the postmortem stats for each of the processes available from the factory
         self.time_parameterized_process_stats = {ptype:{'completed':dict(),
                                                         'turnaround':dict(),
@@ -628,6 +633,13 @@ class DiscreteEventSimulator(object):
         process.cpu = None
         # record the process post mortem stats for this process type
         self.record_process_stats(event)
+        # record the process post mortem stats for this process type
+        self.process_stats[process.type]['completed'] += 1
+        self.process_stats[process.type]['throughput'][self.T] = self.process_stats[process.type]['completed']/self.T
+        self.process_stats[process.type]['turnaround_times'].append(self.T - process.arrival_time)
+        self.process_stats[process.type]['wait_time'].append(process.wait_time)
+        self.process_stats[process.type]['num_preemptions'].append(process.num_preemptions)
+        self.processes_completed += 1
         if self.READY_QUEUE:
             e = Event(etype=Event.PROCESS_DISPATCHED,t=self.T, proc=self.dequeue_process())
             e.p.cpu = self.CPUs[self.locate_cpu(self.idle_cpu)]
@@ -793,138 +805,73 @@ class DiscreteEventSimulator(object):
         self.ready_queue_len.append(len(self.READY_QUEUE))
         self.events_processed += 1
 
-    def to_dict(self):
+
+    def finalize(self):
         """
-        get a json style summary of the entire DES including the following statistics:
-        - simulation length                             self.T
-        - total processes completed                     self.processes_completed
-        - total events processed                        self.events_processed
-        - cpu data
-            - number of cpus                            self.cpu_count                        
-            - CPU data reported in dict(CPU)            self.CPUs
-
-        - ready queue data                              self.ready_queue_len
-            - average ready queue length                
-            - maximum ready queue length                
-            - final ready queue length                  
-            - event parameterized ready queue length    
-
-        - event queue data                              self.event_queue_len
-            - average event queue length     
-            - maximum event queue length
-            - final event queue length
-            - event parameterized event queue length
-
-        - time parameterized stats                      self.time_parameterized_process_stats
-                - time parameterized turnarounds per process
-                - time parameterized wait time per process
-                - time parameterized # preemptions per process
-        
-        - turnaround data                               self.time_parameterized_process_stats
-            - average turnaround per process
-            - max turnaround per process
-            - final turnaround per process
-        - wait time
-            - average wait time per process
-            - final wait time
-            - max wait time
-        
-        - preemptions
-            - average # preemptions per process
-            - final number of preemptions
-            - max # preemptions
+        compute system/process based post mortem run statistics
         """
-        summary = {'totals': {'simulation_length':self.T, 
-                              'events_processed':self.events_processed, 
-                              'processes_completed':self.processes_completed},
-                   'cpus': {f"cpu_{cpu.id}":cpu.to_dict() for cpu in self.CPUs},
-                   'ready_queue':{'avg_length':round(mean(self.ready_queue_len)),
-                                  'max_length':max(self.ready_queue_len),
-                                  'final_length':self.ready_queue_len[-1],
-                                  'queue':self.ready_queue_len},
-                   'event_queue':{'avg_length':round(mean(self.event_queue_len)),
-                                  'max_length':max(self.event_queue_len),
-                                  'final_length':self.event_queue_len[-1],
-                                  'queue':self.event_queue_len},
-                   'time_parameterized':self.time_parameterized_process_stats}
-        
-        summary['T'] = sorted(list(summary['time_parameterized'].keys()))
-        ptypes = self.factory.process_types
-        process_stats = {ptype:{'completed':0, 'turnaround':[], 'wait_time':[], 'preemptions':[]} for ptype in ptypes}
-        for t, proc_stats in self.time_parameterized_process_stats.items():
-            for ptype in ptypes:
-                for k in process_stats[ptype]:
-                    if k != 'completed':
-                        process_stats[ptype][k].extend(proc_stats[ptype][k])
-                    else:
-                        process_stats[ptype][k] += proc_stats[ptype][k]
-
-        process_summary_stats = {ptype:dict() for ptype in ptypes}
-        for ptype in process_stats:
-            for stat in process_stats[ptype]:
-                if stat == 'completed':
-                    process_summary_stats[ptype][stat] = process_stats[ptype][stat]
-                else:
-                    process_summary_stats[ptype][stat] = {'avg':mean(process_stats[ptype][stat]),
-                                                          'max':max(process_stats[ptype][stat]),
-                                                          'final':process_stats[ptype][stat][-1]}
-                     
-        summary['process_summary'] = process_summary_stats
-        return summary
+        self.SIMULATION_LEN = self.T
+        self.avg_eq_len = sum(self.event_queue_len)/len(self.event_queue_len)
+        self.avg_rq_len = sum(self.ready_queue_len)/len(self.ready_queue_len)
+        self.final_eq_len = self.event_queue_len[-1]
+        self.final_rq_len = self.ready_queue_len[-1]
+        for ptype in self.factory.process_types:
+            if self.process_stats[ptype]['turnaround_times']:
+                turnarounds = self.process_stats[ptype]['turnaround_times']
+                self.process_stats[ptype]['final_turnaround'] = turnarounds[-1]
+                self.process_stats[ptype]['longest_turnaround'] = max(turnarounds)
+                self.process_stats[ptype]['average_turnaround'] = sum(turnarounds)/len(turnarounds) 
 
     def summarize(self):
-        self_dict = self.to_dict()
-        ptypes = self.factory.process_types
-        delim = '\n' + 80 * '-' + '\n'
+        self.finalize()
+        delim = '\n' + 100 * '-' + '\n'
         nl = '\n'
         summary = ""
         summary+= '=====- SIMULATION SUMMARY -=====' + nl
-        summary+= f"Simulation Length: {self_dict['totals']['simulation_length']}" + nl
-        summary+= f"Total processes completed: {self_dict['totals']['processes_completed']}" + nl
-        summary+= f"Total events processed: {self_dict['totals']['events_processed']}" + delim
+        summary+= f'Simulation Length: {self.SIMULATION_LEN}' + nl
+        summary+= f'Total processes completed: {self.processes_completed}' + nl
+        summary+= f'Total events processed: {self.events_processed}' + delim
         summary+= 'Ready Queue Statistics' + nl
-        summary+= f" > average length: {self_dict['ready_queue']['avg_length']}" + nl
-        summary+= f" > final length  : {self_dict['ready_queue']['final_length']}" + delim
+        summary+= f' > average length: {round(self.avg_rq_len)}' + nl
+        summary+= f' > final length  : {round(self.final_rq_len)}' + delim
         summary+= 'Event Queue Statistics' + nl
-        summary+= f" > average length: {self_dict['event_queue']['avg_length']}" + nl
-        summary+= f" > final length  : {self_dict['event_queue']['final_length']}" + delim
+        summary+= f' > average length: {round(self.avg_eq_len)}' + nl
+        summary+= f' > final length  : {round(self.final_eq_len)}' + delim
         summary+= 'Process Statistics' + nl
-        summary+= " "*20 + " | " + " | ".join(f"{ptype:<20s}" for ptype in ptypes) + nl
-        summary += "{:>20s} | ".format("# Completed") + " | ".join(f"{self_dict['process_summary'][ptype]['completed']:>20d}" for ptype in ptypes) + " |" + nl 
+        summary+= '{0:<11s} - {1:<10s} - {2:<15s} - {3:<15s} - {4:<15s} - {5:<15s}'.format('Type',
+                                                                                           '# Completed',
+                                                                                           'Avg. turnaround',
+                                                                                           'Max. turnaround',
+                                                                                           'Last turnaround',
+                                                                                           'Avg. wait time') + delim
+        proc_strs = []
+        for ptype in self.factory.process_types:
+            fmt = f"{ptype:<11s} | {self.process_stats[ptype]['completed']:>11d} | " 
+            mx_turnaround    = self.process_stats[ptype]['longest_turnaround']
+            avg_turnaround   = self.process_stats[ptype]['average_turnaround']
+            final_turnaround = self.process_stats[ptype]['final_turnaround'] 
+            mean_wait_time   = sum(self.process_stats[ptype]['wait_time'])/len(self.process_stats[ptype]['wait_time'])
 
-        preemp           = [self_dict['process_summary'][ptype]['preemptions']['avg'] for ptype in ptypes]
-        turnaround_avg   = [self_dict['process_summary'][ptype]['turnaround']['avg'] for ptype in ptypes]
-        turnaround_final = [self_dict['process_summary'][ptype]['turnaround']['final'] for ptype in ptypes]
-        turnaround_max   = [self_dict['process_summary'][ptype]['turnaround']['max'] for ptype in ptypes]
-        wait_times = [self_dict['process_summary'][ptype]['wait_time']['avg'] for ptype in ptypes]
-        summary += "{:>20s} | ".format("Avg. num. preemp.") +\
-                " | ".join("{:>20.02f}".format(pre) for pre in preemp) + " |" + nl
 
-        summary += "{:>20s} | ".format("Avg. wait time") +\
-                " | ".join("{:>20.02f}".format(wait) for wait in wait_times) + " |" + nl 
-        
-        summary += "{:>20s} | ".format("Avg. turnaround") +\
-                " | ".join("{:>20.02f}".format(tu) for tu in turnaround_avg) + " |"+ nl
-
-        summary += "{:>20s} | ".format("Max. turnaround") +\
-                " | ".join("{:>20.02f}".format(tu) for tu in turnaround_max) + " |"+ nl
-
-        summary += "{:>20s} | ".format("End turnaround") +\
-                " | ".join("{:>20.02f}".format(tu) for tu in turnaround_final) + " |"+ nl
-
-        summary += delim[1:]
+            try:
+                fmt = fmt + "{:>15s} | ".format(f"{round(avg_turnaround)} ({quick_ratio(avg_turnaround, self.T)}%)")
+                fmt = fmt + "{:>15s} | ".format(f"{final_turnaround} ({quick_ratio(final_turnaround, self.T)}%)")
+                fmt = fmt + "{:>15s} | ".format(f"{mx_turnaround} ({quick_ratio(mx_turnaround, self.T)}%)")
+                fmt = fmt + "{:>15s}".format(f"{round(mean_wait_time)} ({quick_ratio(mean_wait_time, self.T)}%)")
+            except KeyError:
+                fmt = fmt + "no turnaround data" 
+            proc_strs.append(fmt)
+        summary += "\n".join(proc_strs) + delim
         summary += 'CPU statistics' + nl
-        summary += '{0:<4s} - {1:^15s} - {2:^15s} - {3:^15s}'.format('ID','active time','idle time', 'context switch time') + nl
+        summary += '{0:<4s} - {1:^15s} - {2:^15s} - {3:<15s}'.format('ID','active time','idle time', 'context switch time') + nl
         cpu_strs = []
-        for cpu_name in self_dict['cpus']:
-            cpu = self_dict['cpus'][cpu_name]
-            totals = cpu['totals']
-            cpu_strs.append(f"{cpu['cpu_id']:>4d} | " +
-                            "{:>15s} | ".format(f"{totals['active_time']} ({quick_ratio(totals['active_time'],self.T)}%)") +
-                            "{:>15s} | ".format(f"{totals['idle_time']} ({quick_ratio(totals['idle_time'], self.T)}%)") + 
-                            "{:>15s}".format(f"{totals['context_switch_time']} ({quick_ratio(totals['context_switch_time'], self.T)}%)"))
+        for cpu in self.CPUs:
+            total = cpu.active_time + cpu.context_switch_time + cpu.idle_time 
+            cpu_strs.append(f"{cpu.id:>4d} | " +
+                            "{:>15s} | ".format(f"{cpu.active_time} ({quick_ratio(cpu.active_time,total)}%)") +
+                            "{:>15s} | ".format(f"{cpu.idle_time} ({quick_ratio(cpu.idle_time,total)}%)") + 
+                            "{:>15s}".format(f"{cpu.context_switch_time} ({quick_ratio(cpu.context_switch_time, total)})%"))
         summary += "\n".join(cpu_strs)
-            
         return summary
     
     def get_reward(self):
