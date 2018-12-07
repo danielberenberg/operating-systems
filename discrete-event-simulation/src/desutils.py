@@ -866,10 +866,11 @@ class DiscreteEventSimulator(object):
         summary += '{0:<4s} - {1:^15s} - {2:^15s} - {3:<15s}'.format('ID','active time','idle time', 'context switch time') + nl
         cpu_strs = []
         for cpu in self.CPUs:
-            total = cpu.active_time + cpu.context_switch_time + cpu.idle_time 
+            #total = cpu.active_time + cpu.context_switch_time + cpu.idle_time(self.T) 
+            total = self.T
             cpu_strs.append(f"{cpu.id:>4d} | " +
                             "{:>15s} | ".format(f"{cpu.active_time} ({quick_ratio(cpu.active_time,total)}%)") +
-                            "{:>15s} | ".format(f"{cpu.idle_time} ({quick_ratio(cpu.idle_time,total)}%)") + 
+                            "{:>15s} | ".format(f"{cpu.idle_time(self.T)} ({quick_ratio(cpu.idle_time(self.T),total)}%)") + 
                             "{:>15s}".format(f"{cpu.context_switch_time} ({quick_ratio(cpu.context_switch_time, total)})%"))
         summary += "\n".join(cpu_strs)
         return summary
