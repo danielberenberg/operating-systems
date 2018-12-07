@@ -269,7 +269,7 @@ class CPU(object):
 
         representation['idle_time_per_t'] = {'t':get_t(self._idle_times), 
                                              'idle_time':[self._idle_times[t] for t in get_t(self._idle_times)]}
-
+        
         return representation
 
 class ProcessFactory(object):
