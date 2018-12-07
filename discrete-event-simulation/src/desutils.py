@@ -202,15 +202,28 @@ class CPU(object):
         """
         self.id = cpu_id
         self.active_time =  0
+        self.idle_time = 0
         self.context_switch_time = 0
         self.T = 0
         self._idle_times = dict()
         self._active_times = dict()
         self._slot = None
+        self.last_time_active = 0
 
-    def activate(self, T):
+    def activate(self, T, time):
         self.active_time += T
-        self._active_times[T] = self.active_time
+        self._active_times[time] = self.active_time
+        self.last_time_active = time
+
+    def get_activity(self, time):
+        return self._active_times[time]
+
+    def record_idle(self, T, time):
+        self.idle_time += T
+        self._idle_times[time] = self.idle_time
+
+    def get_idle(self, time):
+        return self._idle_times[time]
 
     @property
     def state(self):
@@ -223,14 +236,6 @@ class CPU(object):
     @property
     def is_busy(self):
         return self.state == CPU.BUSY
-
-    def idle_time(self, T):
-        idle_time = T - self.active_time - self.context_switch_time
-        if T not in self._idle_times:
-            self._idle_times[T] = idle_time 
-        elif T in self._idle_times and self._idle_times[T] < idle_time:
-            self.idle_times[T] = idle_time
-        return self._idle_times[T]
 
     @property
     def is_idle(self):
@@ -430,6 +435,8 @@ class DiscreteEventSimulator(object):
         self.T = 0
         self.T_last = self.T
         
+        self.last_cpu_event_time = self.T
+        self.last_cpu_event = None
         # statistics section of attributes
         self.ready_queue_len = []
         self.event_queue_len = []
@@ -494,8 +501,6 @@ class DiscreteEventSimulator(object):
         """
         # update the current time
         event = self.dequeue_event()
-        if self.last_event is not None and self.RL:
-            self.update_policy(event)
         self.record_status()
         self.T_last = self.T
         self.T = event.t
@@ -508,21 +513,40 @@ class DiscreteEventSimulator(object):
 
         if event.type == Event.PROCESS_SUBMITTED:
             self.handle_process_submitted(event)
+
         elif event.type == Event.PROCESS_DISPATCHED:
             self.handle_process_dispatched(event)
+
         elif event.type == Event.PROCESS_TERMINATED:
             self.handle_process_terminated(event)
+            if self.last_cpu_event is not None and self.RL:
+                self.update_policy(event)
+            self.last_cpu_event_time = self.T
+            self.last_cpu_event = event
+
         elif event.type == Event.TIME_SLICE_EXPIRED:
             self.handle_timeslice_expired(event)
+            if self.last_event is not None and self.RL:
+                self.update_policy(event)
+            #self.last_cpu_event_time = self.T
+            #self.last_cpu_event = event
+
         elif event.type == Event.IO_REQUEST:
             self.handle_io_request(event)
+            if self.last_event is not None and self.RL:
+                self.update_policy(event)
+            #self.last_cpu_event_time = self.T
+            #self.last_cpu_event = event
+
         elif event.type == Event.IO_COMPLETE:
             self.handle_io_complete(event)
 
-        for cpu in self.CPUs:
-            # record idle times
-            _ = cpu.idle_time(self.T)
+        #for cpu in self.CPUs:
+        #    if cpu.is_idle:
+        #        cpu.record_idle(self.T, self.T - self.T_last)
+
         self.last_event = event
+
         return event
 
     def handle_process_submitted(self, event):
@@ -589,6 +613,7 @@ class DiscreteEventSimulator(object):
         """
         process = event.p
         if event.p.cpu.is_idle:
+            event.p.cpu.record_idle(self.T - event.p.cpu.last_time_active, self.T)
             self.CPUs[self.locate_cpu(event.p.cpu.id)](event.p, ctx=self.CONTEXT_SWITCH) # assign proc to a CPU
             # want to either keep the current time cpu burst time or 
             # not overshoot the demand
@@ -625,7 +650,7 @@ class DiscreteEventSimulator(object):
             - dequeue the next process and dispatch it
         """
         process = event.p
-        self.CPUs[self.locate_cpu(process.cpu.id)].activate(process.demand)
+        self.CPUs[self.locate_cpu(process.cpu.id)].activate(process.demand,self.T)
         process.demand = 0        
         process.cpu_current = 0
         cpu = process.cpu
@@ -660,7 +685,7 @@ class DiscreteEventSimulator(object):
         """
         process = event.p
         # pop process off of CPUs, to be replaced with new proc
-        self.CPUs[self.locate_cpu(process.cpu.id)].activate(process.QUANTUM)
+        self.CPUs[self.locate_cpu(process.cpu.id)].activate(process.QUANTUM, self.T)
         ~self.CPUs[self.locate_cpu(process.cpu.id)]
         process.cpu = None
         process.num_preemptions += 1
@@ -689,7 +714,7 @@ class DiscreteEventSimulator(object):
         """
         process = event.p
         process.demand -= process.cpu_current
-        self.CPUs[self.locate_cpu(process.cpu.id)].activate(process.cpu_current)
+        self.CPUs[self.locate_cpu(process.cpu.id)].activate(process.cpu_current, self.T)
         #self.CPUs[self.locate_cpu(process.cpu.id)].active_time += process.cpu_current
         ~self.CPUs[self.locate_cpu(process.cpu.id)] # open up a resource
         process.cpu = None
@@ -855,8 +880,8 @@ class DiscreteEventSimulator(object):
 
             try:
                 fmt = fmt + "{:>15s} | ".format(f"{round(avg_turnaround)} ({quick_ratio(avg_turnaround, self.T)}%)")
-                fmt = fmt + "{:>15s} | ".format(f"{final_turnaround} ({quick_ratio(final_turnaround, self.T)}%)")
                 fmt = fmt + "{:>15s} | ".format(f"{mx_turnaround} ({quick_ratio(mx_turnaround, self.T)}%)")
+                fmt = fmt + "{:>15s} | ".format(f"{final_turnaround} ({quick_ratio(final_turnaround, self.T)}%)")
                 fmt = fmt + "{:>15s}".format(f"{round(mean_wait_time)} ({quick_ratio(mean_wait_time, self.T)}%)")
             except KeyError:
                 fmt = fmt + "no turnaround data" 
@@ -870,7 +895,7 @@ class DiscreteEventSimulator(object):
             total = self.T
             cpu_strs.append(f"{cpu.id:>4d} | " +
                             "{:>15s} | ".format(f"{cpu.active_time} ({quick_ratio(cpu.active_time,total)}%)") +
-                            "{:>15s} | ".format(f"{cpu.idle_time(self.T)} ({quick_ratio(cpu.idle_time(self.T),total)}%)") + 
+                            "{:>15s} | ".format(f"{cpu.idle_time} ({quick_ratio(cpu.idle_time,total)}%)") + 
                             "{:>15s}".format(f"{cpu.context_switch_time} ({quick_ratio(cpu.context_switch_time, total)})%"))
         summary += "\n".join(cpu_strs)
         return summary
@@ -880,22 +905,28 @@ class DiscreteEventSimulator(object):
         return the reard for the current state of the system, given by
         the negative sum over all cpus, their time idle between the
         last two timesteps
-           ___
-         - \      
-           /__ idletime(c, T, T_last)
-         c in cpus
         """
         # goodness of the system should be a function of idle time,
         # downtime
         #return 
         #ncomp = sum(self.time_parameterized_process_stats[self.T_last][ptype]['completed'] for ptype in self.factory.process_types)
         #wait_time_p = self.time_parameterized_process_stats[self.T_last]
-        try:
-            wait_times = sum(sum(self.time_parameterized_process_stats[self.T_last][ptype]['wait_time']) for ptype in self.factory.process_types)
-            ncomp      = sum(self.time_parameterized_process_stats[self.T_last][ptype]['completed'] for ptype in self.factory.process_types)
-            return -1*wait_times/ncomp
-        except KeyError:
-            return -1*sum(cpu.idle_time(self.T) - cpu.idle_time(self.T_last) for cpu in self.CPUs)
+        activity = 0
+        idle = 0
+        n_active = 0
+        n_idle = 0
+        for cpu in self.CPUs:
+            try:
+                mx1 = max(cpu._idle_times.keys())
+                mx2 = max(set(cpu._idle_times.keys()) - set([mx1]))
+                idle += cpu.get_idle(mx1) - cpu.get_idle(mx2)
+            except ValueError:
+                #idle += cpu.get_idle(mx1)
+                idle = 0
+                
+        if -idle > 0:
+            sys.exit(f"\n{cpu.get_idle(mx1)}, {cpu.get_idle(mx2)}")
+        return -idle
 
     def get_state_features(self, event):
         """
@@ -915,7 +946,10 @@ class DiscreteEventSimulator(object):
             elif "idletime" in feat:
                 cpu_id = int(feat.split("_")[1])
                 cpu = self.CPUs[self.locate_cpu(cpu_id)]
-                idle_time_T, idle_time_T_last = cpu.idle_time(self.T), cpu.idle_time(self.T_last) 
+                try:
+                    idle_time_T, idle_time_T_last = cpu.get_idle(self.T), cpu.get_idle(self.T_last) 
+                except KeyError:
+                    idle_time_T = idle_time_T_last = 0
                 state_features[feat] = idle_time_T - idle_time_T_last
             elif feat == "time_in_system":
                 state_features[feat] = self.T - event.p.arrival_time 
@@ -924,13 +958,13 @@ class DiscreteEventSimulator(object):
 
     def get_quantum(self, event):
         state_features = self.get_state_features(event)
-        return self.agent.getPolicy(state_features)
+        q = self.agent.getPolicy(state_features)
+        return q 
 
 
     def update_policy(self, event):
         if self.last_event.t > 1000:
-            last_event = self.last_event
-            last_event_features = self.get_state_features(last_event)
+            last_event_features = self.get_state_features(self.last_cpu_event)
             event_features = self.get_state_features(event)
             self.agent.update(last_event_features, event.p.QUANTUM, event_features, self.get_reward())
 

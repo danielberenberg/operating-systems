@@ -24,6 +24,7 @@ The agent will be proceed in the following way:
 If a process is generated the take in its state and set its QUANTUM
 if a process is dispatched, then take in its state and adjust its QUANTUM 
 """
+import random
 class AdaptivePreemptor:
     """
     Reinforcement Learning based approach to preemption;
@@ -52,7 +53,7 @@ class AdaptivePreemptor:
     """
     POSSIBLE_ACTIONS = list(range(1,200 + 1))
 
-    def __init__(self,cpu_ct=1,enable_io=True,alpha=0.0001, gamma=0.75):
+    def __init__(self,cpu_ct=1,enable_io=True,alpha=0.01, gamma=0.9):
         self.cpu_ct    = cpu_ct
         self.enable_io = enable_io
 
@@ -60,6 +61,7 @@ class AdaptivePreemptor:
         self._initialize_weights()
 
         self.alpha = alpha
+        self.decay = 1e-5
         self.gamma = gamma
         self._t = 0
 
@@ -106,6 +108,7 @@ class AdaptivePreemptor:
         # compute dot product  f(s,a)W, f(s,a) and W each vectors
         for f in self.features:
             qsa += self.getWeights()[f]*state[f]
+
         return qsa
     
     def update(self, state, action, nextState, reward):
@@ -131,15 +134,24 @@ class AdaptivePreemptor:
         for f in state:
             featValue = state[f] # one feature value
             self.weights[f] = current_wts[f] + self.alpha*difference*featValue # weight update 
+        
+        for w in self.weights:
+            try:
+                self.weights[w] = self.weights[w]/sum([self.weights[w] for w in self.weights])
+            except ZeroDivisionError:
+                pass
+        self.alpha -= self.decay
 
     def getPolicy(self, state):
+        if random.random() > 0.01:
+            return random.choice(AdaptivePreemptor.POSSIBLE_ACTIONS)
         return self.computeActionFromQValues(state)
 
     def computeActionFromQValues(self, state):
         """
           Compute the best action to take in a state.  Note that if there
           are no legal actions, which is the case at the terminal state,
-          you should return None.
+          you should return None.
         """
         maxAction       = None
         maxValue        = -1*float('inf')

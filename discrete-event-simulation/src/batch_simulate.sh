@@ -1,5 +1,5 @@
 #!/bin/sh
-STOPTIME=1000000
+STOPTIME=500000
 qtype=$1    # prefix, either 0, -1, -2
 PARDIR=$2  # parent directory if any
 CPU=$3 # number of CPUs
